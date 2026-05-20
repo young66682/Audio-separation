@@ -246,45 +246,110 @@ def setup_page_config():
         initial_sidebar_state="expanded"
     )
 
+# 在文件开头尝试导入 pyperclip（可选依赖）
+try:
+    import pyperclip
+    HAS_PYPERCLIP = True
+except ImportError:
+    HAS_PYPERCLIP = False
+    print("提示: 安装 pyperclip 可使用粘贴路径功能 (pip install pyperclip)")
+import subprocess
+import sys
 
+def select_folder_via_subprocess():
+    """通过子进程打开文件夹选择对话框，返回路径字符串，若取消则返回 None"""
+    script = '''
+import tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+folder = filedialog.askdirectory()
+if folder:
+    print(folder)
+'''
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        else:
+            return None
+    except Exception as e:
+        st.error(f"打开文件夹对话框失败: {e}")
+        return None
+
+
+# ... existing code ...
+# ... existing code ...
 def render_sidebar():
-    """渲染侧边栏"""
+    """渲染侧边栏（支持浏览文件夹、粘贴路径、手动输入）"""
     with st.sidebar:
-        st.header("⚙️ 设置")
+        st.header("️ 设置")
 
         st.subheader("📁 输出目录")
-        output_dir = st.text_input(
+
+        # 输出目录输入框（实时同步）
+        def on_output_dir_text_change():
+            new_path = st.session_state.output_dir_text
+            if new_path:
+                p = Path(new_path)
+                if p != st.session_state.output_dir:
+                    st.session_state.output_dir = p
+                    p.mkdir(parents=True, exist_ok=True)
+
+        # 使用 key 方式确保 value 正确同步
+        st.text_input(
             "输出目录路径",
-            value=str(st.session_state.output_dir),
-            help="分离后的音频文件将保存到此目录"
+            key="output_dir_text",
+            on_change=on_output_dir_text_change,
+            help="可直接输入或粘贴路径（Ctrl+V）"
         )
-        if output_dir:
-            st.session_state.output_dir = Path(output_dir)
-            st.session_state.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 显示当前输出目录
+        st.caption(f" 当前: `{st.session_state.output_dir}`")
+
+        # 两个辅助按钮：粘贴路径 + 浏览文件夹（子进程方式）
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(" 粘贴路径", use_container_width=True):
+                if HAS_PYPERCLIP:
+                    try:
+                        clipboard_text = pyperclip.paste().strip()
+                        if clipboard_text:
+                            p = Path(clipboard_text)
+                            if p.is_dir() or (p.parent.exists() and not p.exists()):
+                                st.session_state.output_dir = p
+                                st.rerun()
+                            else:
+                                st.warning("剪贴板内容不是有效的目录路径")
+                        else:
+                            st.info("剪贴板为空")
+                    except Exception as e:
+                        st.error(f"读取剪贴板失败: {e}")
+                else:
+                    st.info("未安装 pyperclip，可使用快捷键 Ctrl+V 粘贴路径")
+
+        with col2:
+            if st.button("📂 浏览文件夹", use_container_width=True):
+                folder = select_folder_via_subprocess()
+                if folder:
+                    st.session_state.output_dir = Path(folder)
+                    st.success(f"✅ 已选择: {folder}")
+                    st.rerun()
+                else:
+                    st.info("未选择文件夹")
 
         st.divider()
 
-        st.subheader("ℹ️ 使用说明")
-        st.markdown("""
-        1. **上传音频文件** - 支持 MP3, WAV, FLAC, M4A, OGG
-        2. **选择模型** - 根据需求选择合适的AI模型
-        3. **选择音轨** - 勾选需要分离的音轨
-        4. **开始分离** - 点击按钮开始处理
 
-        💡 **提示**: 
-        - 首次使用会下载模型文件
-        - GPU加速可显著提升速度
-        - 进度和日志会显示在控制台
-        """)
+# ... existing code ...
 
-        st.divider()
 
-        st.subheader("📊 系统信息")
-        st.info(f"""
-        - Demucs: {'✅ 已安装' if HAS_DEMUCS else '❌ 未安装'}
-        - PyDub: {'✅ 已安装' if HAS_PYDUB else '❌ 未安装'}
-        - FFmpeg: {'✅ 可用' if shutil.which('ffmpeg') else '❌ 不可用'}
-        """)
+# ... existing code ...
 
 
 def render_main_interface():
