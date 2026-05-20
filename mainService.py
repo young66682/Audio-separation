@@ -235,6 +235,10 @@ def initialize_session_state():
         st.session_state.results = {}
     if 'task_status' not in st.session_state:
         st.session_state.task_status = "idle"
+    if 'progress' not in st.session_state:
+        st.session_state.progress = 0
+    if 'progress_message' not in st.session_state:
+        st.session_state.progress_message = "准备中..."
 
 
 def setup_page_config():
@@ -283,8 +287,6 @@ if folder:
         return None
 
 
-# ... existing code ...
-# ... existing code ...
 def render_sidebar():
     """渲染侧边栏（支持浏览文件夹、粘贴路径、手动输入）"""
     with st.sidebar:
@@ -346,10 +348,15 @@ def render_sidebar():
         st.divider()
 
 
-# ... existing code ...
-
-
-# ... existing code ...
+def display_progress_ui():
+    """显示进度条UI"""
+    if st.session_state.task_status == "processing":
+        st.markdown("### 🔄 处理进度")
+        progress_bar = st.progress(st.session_state.progress)
+        status_text = st.empty()
+        status_text.text(f"{st.session_state.progress_message} ({st.session_state.progress}%)")
+        return progress_bar, status_text
+    return None, None
 
 
 def render_main_interface():
@@ -436,8 +443,9 @@ def render_main_interface():
 
     return uploaded_files, selected_model_key, selected_stems
 
-def process_audio_files(uploaded_files, model_name, selected_stems):
-    """处理音频文件分离（直接在主线程中运行）"""
+
+def process_audio_files(uploaded_files, model_name, selected_stems, progress_bar=None, status_text=None):
+    """处理音频文件分离（支持进度更新）"""
     if not uploaded_files:
         st.error("❌ 请先上传音频文件")
         return None
@@ -462,6 +470,17 @@ def process_audio_files(uploaded_files, model_name, selected_stems):
         print(f"📌 处理文件 ({file_num}/{total_files}): {uploaded_file.name}")
         print(f"{'=' * 60}")
 
+        # 更新文件级进度
+        file_progress_start = int((idx / total_files) * 100)
+        file_progress_end = int(((idx + 1) / total_files) * 100)
+        
+        st.session_state.progress = file_progress_start
+        st.session_state.progress_message = f"处理文件 {file_num}/{total_files}: {uploaded_file.name}"
+        if progress_bar:
+            progress_bar.progress(file_progress_start)
+        if status_text:
+            status_text.text(f"{st.session_state.progress_message} ({st.session_state.progress}%)")
+
         temp_input = Path(tempfile.mkdtemp()) / uploaded_file.name
         with open(temp_input, 'wb') as f:
             f.write(uploaded_file.getbuffer())
@@ -469,8 +488,21 @@ def process_audio_files(uploaded_files, model_name, selected_stems):
         file_output_dir = st.session_state.output_dir / file_stem
         file_output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 创建进度回调函数
         def progress_callback(msg, pct):
-            print(f"📊 进度: {pct}% - {msg}")
+            # 计算整体进度 (文件进度 + 文件内进度)
+            file_range = file_progress_end - file_progress_start
+            overall_progress = file_progress_start + int((pct / 100) * file_range)
+            
+            st.session_state.progress = overall_progress
+            st.session_state.progress_message = f"{uploaded_file.name}: {msg}"
+            
+            print(f"📊 进度: {overall_progress}% - {msg}")
+            
+            if progress_bar:
+                progress_bar.progress(overall_progress)
+            if status_text:
+                status_text.text(f"{st.session_state.progress_message} ({overall_progress}%)")
 
         try:
             print(f"🔧 初始化分离器 - 模型: {model_name}")
@@ -497,9 +529,18 @@ def process_audio_files(uploaded_files, model_name, selected_stems):
             print(f"\n❌ {uploaded_file.name} 分离失败: {str(e)}")
             import traceback
             print(traceback.format_exc())
+            st.session_state.progress_message = f"❌ {uploaded_file.name} 分离失败: {str(e)}"
 
         finally:
             shutil.rmtree(temp_input.parent, ignore_errors=True)
+
+    # 完成
+    st.session_state.progress = 100
+    st.session_state.progress_message = "所有任务完成！"
+    if progress_bar:
+        progress_bar.progress(100)
+    if status_text:
+        status_text.text("所有任务完成！(100%)")
 
     print("\n" + "=" * 60)
     print("🎉 所有任务处理完成！")
@@ -563,10 +604,12 @@ def main():
 
     uploaded_files, model_name, selected_stems = render_main_interface()
 
+    # 显示进度条UI（如果在处理中）
+    progress_bar, status_text = display_progress_ui()
+
     if st.session_state.task_status == "processing":
-        st.info(" 正在处理中，请查看控制台输出...")
-        time.sleep(2)
-        st.rerun()
+        # 显示进度中，不需要sleep，让UI更新
+        pass
 
     start_button = st.button(
         "▶ 开始分离",
@@ -577,7 +620,13 @@ def main():
 
     if start_button:
         st.session_state.task_status = "processing"
-        results = process_audio_files(uploaded_files, model_name, selected_stems)
+        st.session_state.progress = 0
+        st.session_state.progress_message = "准备开始..."
+        st.rerun()
+
+    # 第二次运行：实际处理
+    if st.session_state.task_status == "processing" and progress_bar is not None:
+        results = process_audio_files(uploaded_files, model_name, selected_stems, progress_bar, status_text)
         if results:
             st.session_state.results = results
         st.session_state.task_status = "completed"
@@ -586,9 +635,11 @@ def main():
     if st.session_state.results:
         display_results(st.session_state.results)
 
-        if st.button("🔄 开始新的分离", use_container_width=True):
+        if st.button(" 开始新的分离", use_container_width=True):
             st.session_state.results = {}
             st.session_state.task_status = "idle"
+            st.session_state.progress = 0
+            st.session_state.progress_message = "准备中..."
             st.rerun()
 
 
