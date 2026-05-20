@@ -1,0 +1,7 @@
+streamlit
+demucs>=4.0.0
+pydub>=0.25.1
+torch>=2.0.0
+torchaudio>=2.0.0
+tqdm>=4.65.0
+torchcodec
