@@ -130,10 +130,18 @@ Copy-Item backend\.env.example backend\.env
 ```dotenv
 MVSEP_API_TOKEN=your_token
 MVSEP_WORKFLOW=guitar_first
+MVSEP_DOWNLOAD_RETRIES=5
+MVSEP_DOWNLOAD_RETRY_DELAY_SECONDS=1.5
+MVSEP_POLL_RETRIES=5
 ```
 
 修改 `.env` 后重启后端。Token 只保存在后端，不会发送给浏览器。没有 Token 时，
 本地分离和单吉他扒谱仍可正常使用。
+
+MVSEP 音轨下载支持 `.part` 断点续传、文件长度校验和指数退避重试。双吉他任务
+失败后页面会显示“重试当前任务”，已经完整下载的 `all-guitar`、`lead` 或
+`rhythm` 音轨会直接复用。任务状态会写入任务目录，因此后端重启后仍能查询和恢复
+失败任务。
 
 ## 手动开发
 

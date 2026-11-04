@@ -156,13 +156,16 @@ class SongTranscriber:
         score_artifact = None
         if score_parts:
             combined_path = output_dir / "guitar-score.musicxml"
-            combine_musicxml(
-                score_parts,
-                combined_path,
-                Path(original_filename).stem,
-                capo=options.capo,
-            )
-            score_artifact = combined_path.name
+            try:
+                combine_musicxml(
+                    score_parts,
+                    combined_path,
+                    Path(original_filename).stem,
+                    capo=options.capo,
+                )
+                score_artifact = combined_path.name
+            except Exception as exc:
+                warnings.append(f"双吉他合并总谱生成失败：{exc}")
 
         result = {
             "title": Path(original_filename).stem,
@@ -173,7 +176,10 @@ class SongTranscriber:
             "warnings": warnings,
             "score_artifact": score_artifact,
         }
-        self._write_archive(output_dir, result["title"])
+        try:
+            self._write_archive(output_dir, result["title"])
+        except Exception as exc:
+            warnings.append(f"项目 ZIP 打包失败：{exc}")
         progress_callback and progress_callback(
             100,
             "completed",

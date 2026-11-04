@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -14,10 +15,13 @@ import httpx
 from .config import (
     MVSEP_API_TOKEN,
     MVSEP_API_URL,
+    MVSEP_DOWNLOAD_RETRIES,
+    MVSEP_DOWNLOAD_RETRY_DELAY_SECONDS,
     MVSEP_JOB_TIMEOUT_SECONDS,
     MVSEP_MODEL_TYPE,
     MVSEP_OUTPUT_FORMAT,
     MVSEP_POLL_INTERVAL_SECONDS,
+    MVSEP_POLL_RETRIES,
     MVSEP_SEPARATION_TYPE,
     MVSEP_USE_ENV_PROXY,
     MVSEP_WORKFLOW,
@@ -161,44 +165,61 @@ class MvsepProvider:
         output_dir: Path,
         progress_callback: ProgressCallback | None,
     ) -> SeparationResult:
-        progress_callback and progress_callback(
-            2, "正在上传整曲，提取全部吉他"
-        )
-        guitar_job = self._create_job(audio_path, "31", "7")
-        progress_callback and progress_callback(5, "全部吉他音轨排队中")
-        guitar_files = self._wait_for_result(
-            guitar_job,
-            progress_callback,
-            base_progress=8,
-            stage_label="全部吉他",
-        )
-
-        all_guitar: Path | None = None
-        backing: Path | None = None
-        for file_info in guitar_files:
-            key = _stage_one_key(
-                file_info.get("type"),
-                file_info.get("name"),
-                file_info.get("url"),
+        all_guitar = self._find_cached_stem(output_dir, "all-guitar")
+        backing = self._find_cached_stem(output_dir, "backing")
+        if all_guitar is not None:
+            progress_callback and progress_callback(
+                28, "复用已下载的全部吉他音轨，继续后续处理"
             )
-            if key == "all-guitar" and all_guitar is None:
-                all_guitar = self._download_file(
-                    file_info,
-                    output_dir,
-                    "all-guitar",
-                    progress_callback,
-                    24,
+        else:
+            progress_callback and progress_callback(
+                2, "正在上传整曲，提取全部吉他"
+            )
+            guitar_job = self._create_job(audio_path, "31", "7")
+            progress_callback and progress_callback(5, "全部吉他音轨排队中")
+            guitar_files = self._wait_for_result(
+                guitar_job,
+                progress_callback,
+                base_progress=8,
+                stage_label="全部吉他",
+            )
+
+            for file_info in guitar_files:
+                key = _stage_one_key(
+                    file_info.get("type"),
+                    file_info.get("name"),
+                    file_info.get("url"),
                 )
-            elif key == "backing" and backing is None:
-                backing = self._download_file(
-                    file_info,
-                    output_dir,
-                    "backing",
-                    progress_callback,
-                    28,
-                )
-        if all_guitar is None:
-            raise MvsepError("MVSEP 未能提取出全部吉他音轨")
+                if key == "all-guitar" and all_guitar is None:
+                    all_guitar = self._download_file(
+                        file_info,
+                        output_dir,
+                        "all-guitar",
+                        progress_callback,
+                        24,
+                    )
+                elif key == "backing" and backing is None:
+                    backing = self._download_file(
+                        file_info,
+                        output_dir,
+                        "backing",
+                        progress_callback,
+                        28,
+                    )
+            if all_guitar is None:
+                raise MvsepError("MVSEP 未能提取出全部吉他音轨")
+
+        cached_lead = self._find_cached_stem(output_dir, "lead")
+        cached_rhythm = self._find_cached_stem(output_dir, "rhythm")
+        if cached_lead is not None and cached_rhythm is not None:
+            progress_callback and progress_callback(
+                55, "复用已完成的主音与节奏吉他音轨"
+            )
+            return SeparationResult(
+                lead=cached_lead,
+                rhythm=cached_rhythm,
+                backing=backing,
+            )
 
         progress_callback and progress_callback(
             30, "正在拆分主音吉他与节奏吉他"
@@ -243,6 +264,18 @@ class MvsepProvider:
             rhythm=downloaded["rhythm"],
             backing=backing,
         )
+
+    @staticmethod
+    def _find_cached_stem(output_dir: Path, key: str) -> Path | None:
+        """查找上一次任务已完整落盘的音轨。"""
+        for path in output_dir.glob(f"{key}.*"):
+            if (
+                path.is_file()
+                and path.suffix.lower() in {".flac", ".wav", ".mp3", ".ogg"}
+                and path.stat().st_size > 1024
+            ):
+                return path
+        return None
 
     def _download_file(
         self,
@@ -319,6 +352,7 @@ class MvsepProvider:
         stage_label: str = "",
     ) -> list[dict[str, Any]]:
         deadline = time.monotonic() + MVSEP_JOB_TIMEOUT_SECONDS
+        consecutive_errors = 0
         while time.monotonic() < deadline:
             try:
                 response = self.client.get(
@@ -329,7 +363,19 @@ class MvsepProvider:
                 response.raise_for_status()
                 body = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                raise MvsepError(f"查询 MVSEP 任务失败：{exc}") from exc
+                consecutive_errors += 1
+                if consecutive_errors > MVSEP_POLL_RETRIES:
+                    raise MvsepError(
+                        f"查询 MVSEP 任务失败：{exc}"
+                    ) from exc
+                progress_callback and progress_callback(
+                    base_progress,
+                    f"MVSEP 查询暂时中断，正在重试"
+                    f"（{consecutive_errors}/{MVSEP_POLL_RETRIES}）",
+                )
+                time.sleep(MVSEP_POLL_INTERVAL_SECONDS)
+                continue
+            consecutive_errors = 0
 
             data = body.get("data") or {}
             status = str(body.get("status") or "").lower()
@@ -366,16 +412,90 @@ class MvsepProvider:
         )
 
     def _download(self, url: str, destination: Path) -> None:
-        try:
-            with self.client.stream(
-                "GET",
-                url,
-                timeout=httpx.Timeout(300.0, connect=30.0),
-            ) as response:
-                response.raise_for_status()
-                with destination.open("wb") as output:
-                    for chunk in response.iter_bytes(1024 * 1024):
-                        output.write(chunk)
-        except (httpx.HTTPError, OSError) as exc:
-            destination.unlink(missing_ok=True)
-            raise MvsepError(f"下载 MVSEP 音轨失败：{exc}") from exc
+        """带断点续传和完整性校验下载 MVSEP 音轨。"""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        partial = destination.with_name(f"{destination.name}.part")
+        last_error: Exception | None = None
+
+        for attempt in range(MVSEP_DOWNLOAD_RETRIES + 1):
+            existing_bytes = partial.stat().st_size if partial.exists() else 0
+            headers = {"Accept-Encoding": "identity"}
+            if existing_bytes:
+                headers["Range"] = f"bytes={existing_bytes}-"
+
+            try:
+                with self.client.stream(
+                    "GET",
+                    url,
+                    headers=headers,
+                    timeout=httpx.Timeout(
+                        600.0,
+                        connect=30.0,
+                        read=60.0,
+                        write=30.0,
+                        pool=30.0,
+                    ),
+                ) as response:
+                    if response.status_code == 416 and existing_bytes:
+                        os.replace(partial, destination)
+                        return
+                    response.raise_for_status()
+
+                    resumed = response.status_code == 206 and existing_bytes > 0
+                    mode = "ab" if resumed else "wb"
+                    start_bytes = existing_bytes if resumed else 0
+                    content_range = response.headers.get("content-range", "")
+                    total_match = re.search(r"/(\d+)$", content_range)
+                    expected_total = (
+                        int(total_match.group(1))
+                        if total_match
+                        else (
+                            start_bytes + int(response.headers["content-length"])
+                            if response.headers.get("content-length")
+                            else None
+                        )
+                    )
+                    expected_chunk = (
+                        int(response.headers["content-length"])
+                        if response.headers.get("content-length")
+                        else None
+                    )
+                    written = 0
+                    with partial.open(mode) as output:
+                        for chunk in response.iter_bytes(1024 * 1024):
+                            output.write(chunk)
+                            written += len(chunk)
+
+                    actual_size = partial.stat().st_size
+                    if expected_chunk is not None and written != expected_chunk:
+                        raise MvsepError(
+                            f"下载不完整：收到 {written} 字节，"
+                            f"应为 {expected_chunk} 字节"
+                        )
+                    if expected_total is not None and actual_size != expected_total:
+                        raise MvsepError(
+                            f"文件长度不匹配：实际 {actual_size} 字节，"
+                            f"应为 {expected_total} 字节"
+                        )
+                    if actual_size == 0:
+                        raise MvsepError("下载得到的音轨文件为空")
+                    os.replace(partial, destination)
+                    return
+            except (httpx.HTTPError, OSError, MvsepError) as exc:
+                last_error = exc
+                if (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and 400 <= exc.response.status_code < 500
+                    and exc.response.status_code not in {408, 429}
+                ):
+                    break
+                if attempt < MVSEP_DOWNLOAD_RETRIES:
+                    time.sleep(
+                        MVSEP_DOWNLOAD_RETRY_DELAY_SECONDS * (2 ** attempt)
+                    )
+
+        cached_bytes = partial.stat().st_size if partial.exists() else 0
+        raise MvsepError(
+            f"下载 MVSEP 音轨失败，已尝试 {MVSEP_DOWNLOAD_RETRIES + 1} 次"
+            f"（保留断点 {cached_bytes} 字节）：{last_error}"
+        ) from last_error

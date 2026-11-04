@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .audio_validation import AudioValidationError, validate_audio_file
 from .config import (
     ALLOWED_AUDIO_EXTENSIONS,
     FRONTEND_DIST_DIR,
@@ -94,6 +95,39 @@ app.add_middleware(
 def _safe_filename(filename: str | None) -> str:
     name = Path(filename or "guitar.wav").name.strip()
     return name or "guitar.wav"
+
+
+async def _save_upload_file(
+    audio: UploadFile,
+    destination: Path,
+) -> int:
+    """流式保存上传内容，失败时清理半文件并校验音频。"""
+    size = 0
+    try:
+        with destination.open("wb") as output:
+            while chunk := await audio.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"文件超过 "
+                            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB 限制"
+                        ),
+                    )
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="上传文件为空")
+        try:
+            validate_audio_file(destination)
+        except AudioValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return size
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        await audio.close()
 
 
 def _get_job(job_id: str) -> TranscriptionJob:
@@ -216,29 +250,14 @@ async def create_transcription(
     job = runner.new_job(filename=filename, options=options)
     job_dir = runner.job_dir(job.id)
     input_path = job_dir / f"input{extension}"
-    size = 0
-
     try:
-        with input_path.open("wb") as destination:
-            while chunk := await audio.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB 限制",
-                    )
-                destination.write(chunk)
-        if size == 0:
-            raise HTTPException(status_code=400, detail="上传文件为空")
+        await _save_upload_file(audio, input_path)
     except HTTPException as exc:
         runner.fail_upload(job.id, str(exc.detail))
         raise
     except Exception as exc:
         runner.fail_upload(job.id, f"保存上传文件失败: {exc}")
         raise HTTPException(status_code=500, detail="保存上传文件失败") from exc
-    finally:
-        await audio.close()
-
     runner.start(job.id, input_path)
     return TranscriptionCreated(job_id=job.id, status="queued")
 
@@ -351,28 +370,14 @@ async def create_song_transcription(
     job = song_runner.new_job(filename=filename, options=options)
     job_dir = song_runner.job_dir(job.id)
     input_path = job_dir / f"input{extension}"
-    size = 0
     try:
-        with input_path.open("wb") as destination:
-            while chunk := await audio.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB 限制",
-                    )
-                destination.write(chunk)
-        if size == 0:
-            raise HTTPException(status_code=400, detail="上传文件为空")
+        await _save_upload_file(audio, input_path)
     except HTTPException as exc:
         song_runner.fail_upload(job.id, str(exc.detail))
         raise
     except Exception as exc:
         song_runner.fail_upload(job.id, f"保存上传文件失败: {exc}")
         raise HTTPException(status_code=500, detail="保存上传文件失败") from exc
-    finally:
-        await audio.close()
-
     song_runner.start(job.id, input_path)
     return TranscriptionCreated(job_id=job.id, status="queued")
 
@@ -383,6 +388,24 @@ async def create_song_transcription(
 )
 def get_song_transcription(job_id: str) -> SongTranscriptionJob:
     return _get_song_job(job_id)
+
+
+@app.post(
+    "/api/song-transcriptions/{job_id}/retry",
+    response_model=TranscriptionCreated,
+    status_code=202,
+)
+def retry_song_transcription(job_id: str) -> TranscriptionCreated:
+    """从失败位置重试双吉他任务，优先复用已下载音轨。"""
+    try:
+        job = song_runner.retry(job_id)
+    except UnknownJobError as exc:
+        raise HTTPException(status_code=404, detail="整曲任务不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TranscriptionCreated(job_id=job.id, status=job.status)
 
 
 def _song_audio_path(job_id: str, stem_key: str) -> Path:
@@ -552,29 +575,14 @@ async def create_separation(
     job = separation_runner.new_job(filename=filename, options=options)
     job_dir = separation_runner.job_dir(job.id)
     input_path = job_dir / f"input{extension}"
-    size = 0
     try:
-        with input_path.open("wb") as destination:
-            while chunk := await audio.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB 限制",
-                    )
-                destination.write(chunk)
-        if size == 0:
-            raise HTTPException(status_code=400, detail="上传文件为空")
+        await _save_upload_file(audio, input_path)
     except HTTPException as exc:
-        input_path.unlink(missing_ok=True)
         separation_runner.fail_upload(job.id, str(exc.detail))
         raise
     except Exception as exc:
-        input_path.unlink(missing_ok=True)
         separation_runner.fail_upload(job.id, f"保存上传文件失败: {exc}")
         raise HTTPException(status_code=500, detail="保存上传文件失败") from exc
-    finally:
-        await audio.close()
 
     separation_runner.start(job.id, input_path)
     return SeparationCreated(job_id=job.id, status="queued")

@@ -875,6 +875,28 @@ main {
   line-height: 1.55;
 }
 
+.retry-button {
+  width: 100%;
+  margin-top: 9px;
+  padding: 10px 13px;
+  border: 1px solid rgba(242, 179, 95, 0.35);
+  border-radius: 9px;
+  color: #f2c983;
+  background: rgba(242, 179, 95, 0.06);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.retry-button:hover:not(:disabled) {
+  border-color: var(--amber);
+  background: rgba(242, 179, 95, 0.1);
+}
+
+.retry-button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
 .config-notice {
   margin-top: 16px;
   padding: 13px 14px;

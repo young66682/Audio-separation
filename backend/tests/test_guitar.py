@@ -126,6 +126,35 @@ def test_musicxml_contains_string_and_fret_indications(tmp_path: Path) -> None:
     assert "<fret>" in xml
 
 
+def test_musicxml_keeps_overlapping_attacks_in_complete_measures(
+    tmp_path: Path,
+) -> None:
+    events, _ = build_tablature(
+        [
+            note(0.0, 2.0, 64),
+            note(0.25, 2.25, 67),
+            note(0.5, 2.5, 71),
+            note(1.0, 3.0, 72),
+        ],
+        bpm=120,
+        tuning_text=STANDARD_TUNING,
+        capo=0,
+        max_fret=22,
+    )
+    output = tmp_path / "overlap.musicxml"
+    write_musicxml(events, 120, output, "Overlap")
+
+    root = ET.parse(output).getroot()
+    divisions = int(root.findtext("./part/measure/attributes/divisions"))
+    for measure in root.findall("./part/measure"):
+        duration = sum(
+            int(note.findtext("duration", "0"))
+            for note in measure.findall("note")
+            if note.find("chord") is None
+        )
+        assert duration == divisions * 4
+
+
 def test_midi_uses_final_tab_events(tmp_path: Path) -> None:
     events, _ = build_tablature(
         [note(0.0, 0.5, 64), note(0.51, 1.0, 67)],
@@ -176,5 +205,14 @@ def test_combined_musicxml_contains_two_guitar_parts(tmp_path: Path) -> None:
         "Lead Guitar",
         "Rhythm Guitar",
     ]
+    assert [
+        item.text for item in root.findall(".//midi-channel")
+    ] == ["1", "2"]
     assert "Capo fret 2" in combined_path.read_text(encoding="utf-8")
+    first_measure = root.find("./part/measure")
+    assert first_measure is not None
+    assert [child.tag for child in first_measure][:2] == [
+        "attributes",
+        "direction",
+    ]
 

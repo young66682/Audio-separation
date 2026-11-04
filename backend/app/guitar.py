@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Sequence
 DEFAULT_TUNING = "E2,A2,D3,G3,B3,E4"
 SUBDIVISIONS_PER_BEAT = 4
 MAX_CHORD_NOTES = 6
+MUSICXML_BEATS_PER_MEASURE = 4.0  # 当前导出的总谱统一使用 4/4 拍。
 
 PITCH_CLASSES = {
     "C": 0,
@@ -357,6 +358,7 @@ def write_musicxml(
     """Export a guitar part with string and fret indications."""
     from music21 import articulations, chord, clef, instrument, meter, stream, tempo
 
+    musicxml_events = _musicxml_events_without_voice_overlap(events)
     score = stream.Score(id="guitar-transcription")
     score.insert(0, metadata_title(title))
     part = stream.Part(id="guitar")
@@ -366,7 +368,7 @@ def write_musicxml(
     part.insert(0, tempo.MetronomeMark(number=bpm))
 
     grouped: dict[float, list[dict[str, Any]]] = {}
-    for event in events:
+    for event in musicxml_events:
         grouped.setdefault(float(event["start_beat"]), []).append(event)
 
     for start_beat, group in sorted(grouped.items()):
@@ -387,7 +389,50 @@ def write_musicxml(
     part.makeMeasures(inPlace=True)
     score.insert(0, part)
     score.write("musicxml", fp=str(output_path))
-    _add_musicxml_technical_indications(output_path, events, tuning_text)
+    _add_musicxml_technical_indications(
+        output_path,
+        musicxml_events,
+        tuning_text,
+    )
+
+
+def _musicxml_events_without_voice_overlap(
+    events: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """在不改变起音和音高的前提下，保证单声部吉他的小节完整。
+
+    转录结果可能包含延续到下一次起音的余音。music21 会把这类事件写进
+    同一个 MusicXML 声部而不插入回退标记，造成小节超拍；MuseScore 导入
+    时会自动挪动后续音符来修复。这里把每组起音截断到下一次起音或小节线，
+    既保留节奏位置，也能让 music21 输出长度正确的小节。
+    """
+    grouped: dict[float, list[dict[str, Any]]] = {}
+    for event in events:
+        start_beat = round(float(event["start_beat"]), 4)
+        grouped.setdefault(start_beat, []).append(event)
+
+    starts = sorted(grouped)
+    normalized: list[dict[str, Any]] = []
+    for index, start_beat in enumerate(starts):
+        next_start = (
+            starts[index + 1]
+            if index + 1 < len(starts)
+            else start_beat + MUSICXML_BEATS_PER_MEASURE
+        )
+        bar_end = (
+            math.floor(start_beat / MUSICXML_BEATS_PER_MEASURE) + 1
+        ) * MUSICXML_BEATS_PER_MEASURE
+        available = max(0.25, min(next_start, bar_end) - start_beat)
+        duration_beats = round(available, 4)
+        for event in grouped[start_beat]:
+            normalized.append(
+                {
+                    **event,
+                    "start_beat": start_beat,
+                    "duration_beats": duration_beats,
+                }
+            )
+    return normalized
 
 
 def _musicxml_pitch_midi(note_element: ET.Element) -> int | None:
@@ -574,6 +619,11 @@ def combine_musicxml(
         abbreviation = score_part.find("part-abbreviation")
         if abbreviation is not None:
             abbreviation.text = label
+        # 两个吉他声部必须使用不同的 MIDI 通道，否则播放器可能串音。
+        for midi_channel in score_part.findall(
+            "midi-instrument/midi-channel"
+        ):
+            midi_channel.text = str(index)
         part_list.append(score_part)
 
         combined_part = deepcopy(source_part)
@@ -585,7 +635,10 @@ def combine_musicxml(
                 direction_type = ET.SubElement(direction, "direction-type")
                 words = ET.SubElement(direction_type, "words")
                 words.text = f"Capo fret {capo}"
-                first_measure.insert(0, direction)
+                attributes = first_measure.find("attributes")
+                # MusicXML 要求 attributes 位于小节内容之前。
+                insert_at = 1 if attributes is not None else 0
+                first_measure.insert(insert_at, direction)
         root.append(combined_part)
 
     ET.ElementTree(root).write(

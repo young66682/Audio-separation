@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -30,11 +31,69 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _persist_job_snapshot(directory: Path, job: Any) -> None:
+    """原子写入任务快照，避免进程中断留下半个 JSON。"""
+    target = directory / "job.json"
+    temporary = directory / "job.json.tmp"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            job.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temporary, target)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        print(f"[jobs] 任务快照写入失败：{exc}", flush=True)
+
+
+def _load_job_snapshots(
+    directory: Path,
+    job_type: type[Any],
+    *,
+    excluded_directories: set[str] | None = None,
+) -> dict[str, Any]:
+    """加载历史任务；上次运行中的任务标记为中断。"""
+    if not directory.exists():
+        return {}
+    excluded = excluded_directories or set()
+    jobs: dict[str, Any] = {}
+    for snapshot in directory.glob("*/job.json"):
+        if snapshot.parent.name in excluded:
+            continue
+        try:
+            job = job_type.model_validate_json(
+                snapshot.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        if job.status in {"queued", "running"}:
+            payload = job.model_dump(mode="python")
+            payload.update(
+                {
+                    "status": "failed",
+                    "stage": "interrupted",
+                    "message": "服务重启，任务已中断",
+                    "error": "服务重启导致任务中断，可以重新提交或重试。",
+                    "updated_at": _utc_now(),
+                    "revision": job.revision + 1,
+                }
+            )
+            job = job_type.model_validate(payload)
+            _persist_job_snapshot(snapshot.parent, job)
+        jobs[job.id] = job
+    return jobs
+
+
 class JobRunner:
     """串行执行单吉他扒谱，并提供可供查询的进度快照。"""
 
     def __init__(self) -> None:
-        self._jobs: dict[str, TranscriptionJob] = {}
+        self._jobs: dict[str, TranscriptionJob] = _load_job_snapshots(
+            JOBS_DIR,
+            TranscriptionJob,
+            excluded_directories={"songs", "separations"},
+        )
         self._lock = threading.RLock()
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
             max_workers=1,
@@ -61,6 +120,7 @@ class JobRunner:
         )
         with self._lock:
             self._jobs[job.id] = job
+            _persist_job_snapshot(JOBS_DIR / job.id, job)
         return job
 
     def job_dir(self, job_id: str) -> Path:
@@ -156,6 +216,7 @@ class JobRunner:
             )
             updated = TranscriptionJob.model_validate(payload)
             self._jobs[job_id] = updated
+            _persist_job_snapshot(JOBS_DIR / job_id, updated)
             return updated
 
     def get(self, job_id: str) -> TranscriptionJob:
@@ -190,7 +251,10 @@ class SongJobRunner:
     """串行执行整曲双吉他分离与扒谱任务。"""
 
     def __init__(self) -> None:
-        self._jobs: dict[str, SongTranscriptionJob] = {}
+        self._jobs: dict[str, SongTranscriptionJob] = _load_job_snapshots(
+            SONG_JOBS_DIR,
+            SongTranscriptionJob,
+        )
         self._lock = threading.RLock()
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
             max_workers=1,
@@ -216,6 +280,7 @@ class SongJobRunner:
         )
         with self._lock:
             self._jobs[job.id] = job
+            _persist_job_snapshot(SONG_JOBS_DIR / job.id, job)
         return job
 
     def job_dir(self, job_id: str) -> Path:
@@ -244,6 +309,34 @@ class SongJobRunner:
             message="上传失败",
             error=message,
         )
+
+    def retry(self, job_id: str) -> SongTranscriptionJob:
+        """重试失败的双吉他任务，并复用已下载完成的音轨。"""
+        with self._lock:
+            current = self._jobs.get(job_id)
+            if current is None:
+                raise UnknownJobError(job_id)
+            if current.status not in {"failed", "partial"}:
+                raise ValueError("只有失败或部分完成的任务可以重试")
+            input_files = [
+                path
+                for path in self.job_dir(job_id).glob("input.*")
+                if path.is_file()
+            ]
+            if not input_files:
+                raise FileNotFoundError("任务原始音频不存在，请重新上传")
+            audio_path = input_files[0]
+        self._update(
+            job_id,
+            status="queued",
+            progress=0,
+            stage="queued",
+            message="正在从已有分轨恢复任务",
+            error=None,
+            result=None,
+        )
+        self.start(job_id, audio_path)
+        return self.get(job_id)
 
     def _run(
         self,
@@ -314,6 +407,7 @@ class SongJobRunner:
             )
             updated = SongTranscriptionJob.model_validate(payload)
             self._jobs[job_id] = updated
+            _persist_job_snapshot(SONG_JOBS_DIR / job_id, updated)
             return updated
 
     def get(self, job_id: str) -> SongTranscriptionJob:
@@ -344,7 +438,10 @@ class SeparationJobRunner:
     """串行执行本地 Demucs 任务，避免并发占用过多内存。"""
 
     def __init__(self) -> None:
-        self._jobs: dict[str, SeparationJob] = {}
+        self._jobs: dict[str, SeparationJob] = _load_job_snapshots(
+            SEPARATION_JOBS_DIR,
+            SeparationJob,
+        )
         self._lock = threading.RLock()
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
             max_workers=1,
@@ -370,6 +467,7 @@ class SeparationJobRunner:
         )
         with self._lock:
             self._jobs[job.id] = job
+            _persist_job_snapshot(SEPARATION_JOBS_DIR / job.id, job)
         return job
 
     def job_dir(self, job_id: str) -> Path:
@@ -466,6 +564,7 @@ class SeparationJobRunner:
             )
             updated = SeparationJob.model_validate(payload)
             self._jobs[job_id] = updated
+            _persist_job_snapshot(SEPARATION_JOBS_DIR / job_id, updated)
             return updated
 
     def get(self, job_id: str) -> SeparationJob:

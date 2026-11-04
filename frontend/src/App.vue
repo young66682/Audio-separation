@@ -16,6 +16,10 @@ import {
   createSongTranscription,
   createTranscription,
   fetchHealth,
+  fetchSeparationJob,
+  fetchSongJob,
+  fetchTranscriptionJob,
+  retrySongTranscription,
   searchAvailableScores,
   searchMarketAvailability,
   separationArchiveUrl,
@@ -206,6 +210,7 @@ function artifactEntries(
 
 onMounted(async () => {
   await refreshHealth();
+  await restoreJobFromUrl();
 });
 
 onBeforeUnmount(() => {
@@ -252,6 +257,34 @@ async function refreshHealth() {
   }
 }
 
+async function restoreJobFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const jobId = params.get("job");
+  const mode = params.get("mode");
+  if (!jobId) return;
+  try {
+    if (mode === "song") {
+      workMode.value = "song";
+      const job = await fetchSongJob(jobId);
+      songJob.value = job;
+      if (job.status === "queued" || job.status === "running") {
+        watchSongJob(jobId);
+      } else if (job.status === "failed") {
+        errorMessage.value = job.error ?? "整曲任务失败";
+      }
+    } else if (mode === "separate") {
+      workMode.value = "separate";
+      separationJob.value = await fetchSeparationJob(jobId);
+    } else {
+      workMode.value = "guitar";
+      singleJob.value = await fetchTranscriptionJob(jobId);
+    }
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : "无法恢复任务结果";
+  }
+}
+
 function setMode(mode: WorkMode) {
   if (isWorking.value || workMode.value === mode) return;
   workMode.value = mode;
@@ -285,6 +318,27 @@ function setFile(file: File | undefined) {
   searchAllLookups();
   currentTime.value = 0;
   if (workMode.value !== "song") errorMessage.value = "";
+}
+
+function watchSongJob(jobId: string) {
+  stopEvents = subscribeToSongJob(
+    jobId,
+    (job) => {
+      songJob.value = job;
+      submitting.value = false;
+      if (job.status === "failed") {
+        errorMessage.value = job.error ?? "整曲双吉他处理失败";
+      }
+    },
+    () => {
+      stopEvents?.();
+      stopEvents = null;
+    },
+    (message) => {
+      errorMessage.value = message;
+      submitting.value = false;
+    },
+  );
 }
 
 function searchAllLookups() {
@@ -415,24 +469,7 @@ async function startTranscription() {
       );
     } else if (workMode.value === "song") {
       const created = await createSongTranscription(selectedFile.value, options);
-      stopEvents = subscribeToSongJob(
-        created.job_id,
-        (job) => {
-          songJob.value = job;
-          submitting.value = false;
-          if (job.status === "failed") {
-            errorMessage.value = job.error ?? "整曲双吉他处理失败";
-          }
-        },
-        () => {
-          stopEvents?.();
-          stopEvents = null;
-        },
-        (message) => {
-          errorMessage.value = message;
-          submitting.value = false;
-        },
-      );
+      watchSongJob(created.job_id);
     } else {
       const created = await createTranscription(selectedFile.value, options);
       stopEvents = subscribeToJob(
@@ -456,6 +493,22 @@ async function startTranscription() {
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "提交任务失败";
+    submitting.value = false;
+  }
+}
+
+async function retryCurrentSongJob() {
+  if (!songJob.value || songJob.value.status !== "failed") return;
+  errorMessage.value = "";
+  submitting.value = true;
+  stopEvents?.();
+  stopEvents = null;
+  try {
+    const created = await retrySongTranscription(songJob.value.id);
+    watchSongJob(created.job_id);
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : "重试任务失败";
     submitting.value = false;
   }
 }
@@ -1039,6 +1092,15 @@ function selectGuitar(key: GuitarKey) {
           </div>
 
           <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+          <button
+            v-if="workMode === 'song' && songJob?.status === 'failed'"
+            type="button"
+            class="retry-button"
+            :disabled="submitting"
+            @click="retryCurrentSongJob"
+          >
+            ↻ 重试当前任务（复用已下载音轨）
+          </button>
         </div>
       </section>
 

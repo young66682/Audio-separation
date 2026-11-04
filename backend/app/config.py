@@ -41,7 +41,12 @@ MVSEP_WORKFLOW = os.getenv("MVSEP_WORKFLOW", "guitar_first")
 MVSEP_POLL_INTERVAL_SECONDS = float(
     os.getenv("MVSEP_POLL_INTERVAL_SECONDS", "3")
 )
+MVSEP_POLL_RETRIES = int(os.getenv("MVSEP_POLL_RETRIES", "5"))
 MVSEP_JOB_TIMEOUT_SECONDS = int(os.getenv("MVSEP_JOB_TIMEOUT_SECONDS", "3600"))
+MVSEP_DOWNLOAD_RETRIES = int(os.getenv("MVSEP_DOWNLOAD_RETRIES", "5"))
+MVSEP_DOWNLOAD_RETRY_DELAY_SECONDS = float(
+    os.getenv("MVSEP_DOWNLOAD_RETRY_DELAY_SECONDS", "1.5")
+)
 MVSEP_USE_ENV_PROXY = os.getenv("MVSEP_USE_ENV_PROXY", "false").lower() in {
     "1",
     "true",

@@ -9,14 +9,23 @@ const props = defineProps<{
 const host = ref<HTMLDivElement | null>(null);
 const loading = ref(true);
 const errorMessage = ref("");
+const renderTimeoutMessage =
+  "乐谱仍在排版。长谱首次加载可能需要更久，也可以下载 MusicXML 在 MuseScore 或 Guitar Pro 中打开。";
 let api: alphaTab.AlphaTabApi | null = null;
 let renderTimeout: number | null = null;
+
+function assetUrl(path: string): string {
+  return new URL(path, document.baseURI).href;
+}
 
 onMounted(() => {
   if (!host.value) return;
   api = new alphaTab.AlphaTabApi(host.value, {
     core: {
       file: props.url,
+      // Vite 会把 alphaTab 字体复制到 /font，而生产资源位于 /assets。
+      // 不显式指定字体目录会导致乐谱空白和打印乱码。
+      fontDirectory: assetUrl("font/"),
       logLevel: alphaTab.LogLevel.Error,
     },
     display: {
@@ -46,6 +55,9 @@ onMounted(() => {
   });
   api.renderFinished.on(() => {
     loading.value = false;
+    if (errorMessage.value === renderTimeoutMessage) {
+      errorMessage.value = "";
+    }
     if (renderTimeout !== null) {
       window.clearTimeout(renderTimeout);
       renderTimeout = null;
@@ -57,10 +69,9 @@ onMounted(() => {
   });
   renderTimeout = window.setTimeout(() => {
     if (loading.value) {
-      errorMessage.value =
-        "乐谱排版超时。可以下载 MusicXML 在 MuseScore 或 Guitar Pro 中打开。";
+      errorMessage.value = renderTimeoutMessage;
     }
-  }, 15000);
+  }, 30000);
 });
 
 onBeforeUnmount(() => {

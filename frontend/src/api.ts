@@ -27,6 +27,32 @@ export async function fetchHealth(): Promise<Health> {
   return response.json();
 }
 
+export async function fetchSongJob(jobId: string): Promise<SongTranscriptionJob> {
+  const response = await fetch(songEndpoint(jobId));
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
+export async function fetchSeparationJob(jobId: string): Promise<SeparationJob> {
+  const response = await fetch(separationEndpoint(jobId));
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
+export async function fetchTranscriptionJob(
+  jobId: string,
+): Promise<TranscriptionJob> {
+  const response = await fetch(jobEndpoint(jobId));
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
 export async function createTranscription(
   file: File,
   options: {
@@ -85,6 +111,19 @@ export async function createSongTranscription(
     method: "POST",
     body,
   });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
+export async function retrySongTranscription(
+  jobId: string,
+): Promise<{ job_id: string; status: string }> {
+  const response = await fetch(
+    songEndpoint(jobId, "/retry"),
+    { method: "POST" },
+  );
   if (!response.ok) {
     throw new Error(await readError(response));
   }
