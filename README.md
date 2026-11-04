@@ -10,6 +10,10 @@ FastAPI + Vue 应用中。
 - 勾选任意乐器后，自动混合其余音轨，生成“去掉该乐器”的伴奏。
 - 多个乐器可同时勾选，每个乐器会生成一份独立伴奏。
 - 全部音轨、伴奏、清单和原始歌曲可打包为 ZIP。
+- 上传歌曲后可按文件名联网查询市面已有的 Backing Track、Karaoke、
+  Instrumental 和指定乐器去轨版本，并直接试听或跳转查看。
+- 曲谱速查优先返回弹琴吧（tan8.com）的具体中文吉他谱页面，并提供
+  Songsterr、MuseScore 和 Ultimate Guitar 的备用搜索入口。
 - 实时显示任务阶段和 Demucs 分离进度。
 - 单吉他音频可生成六线谱、MIDI、MusicXML 和音符 JSON。
 - 可选 MVSEP 云端双吉他路线，将歌曲拆成主音与节奏吉他后分别扒谱。
@@ -67,6 +71,14 @@ cd "G:\python\poject\Audio separation"
 再把它们混合成伴奏。AI 分离不是数学上的完美反相消除，失真吉他、混响和声像重叠
 仍可能留下少量串音。
 
+市面伴奏速查默认使用文件名作为歌曲名，并调用 Apple Music/iTunes Search 接口。
+文件名不准确时可以在速查面板里修改歌曲名和艺人后重新查询。该功能只返回官方
+商品和试听链接，不下载第三方版权音频；没有找到时会提示直接使用本地分离。
+
+切换到“曲谱”标签会按相同歌曲名和艺人优先查询弹琴吧的中文吉他谱。国内接口
+不可用时会回退到 Ultimate Guitar；打开第三方曲谱仍需遵守对应网站的访问和版权
+规则。
+
 ### 吉他扒谱
 
 - “单吉他音轨”完全在本地识别，适合已经分离好的 guitar stem 或独奏。
@@ -84,6 +96,21 @@ cd "G:\python\poject\Audio separation"
 
 “快速 / 均衡 / 高质量”分别控制 Demucs shifts 与 overlap。CPU 上推荐先用
 `htdemucs` + 快速模式验证流程，再用 6 轨模型精细分离。
+
+### NVIDIA GPU 加速
+
+后端依赖默认锁定为 PyTorch/TorchAudio `2.9.1 + CUDA 13.0`。当前机器的
+RTX 4060 Laptop 会自动使用 `cuda`，不需要另外安装完整 CUDA Toolkit，只需安装
+兼容的 NVIDIA 驱动。首次运行 `setup.ps1` 需要下载约 1.8 GB 的 GPU 运行时。
+
+检查当前设备和 CUDA 是否可用：
+
+```powershell
+.\backend\.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+页面右上角会显示“本地分离引擎就绪 / CUDA”。如果驱动或显卡不可用，应用会回退到
+CPU，避免直接中断任务。
 
 可通过 `backend/.env` 强制设备：
 
@@ -153,6 +180,8 @@ MusicXML/MIDI 导出。
 ## API
 
 - `GET /api/health`：运行时、设备、模型和转录能力。
+- `POST /api/market/search`：按歌曲名查询市面伴奏和试听链接。
+- `POST /api/scores/search`：查询弹琴吧现有曲谱，并提供国际谱库备用入口。
 - `POST /api/separations`：上传音频并创建本地分离任务。
 - `GET /api/separations/{job_id}`：查询任务与结果。
 - `GET /api/separations/{job_id}/events`：SSE 实时进度。

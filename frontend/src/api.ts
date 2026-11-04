@@ -1,5 +1,7 @@
 import type {
   Health,
+  MarketSearchResponse,
+  ScoreSearchResponse,
   SeparationJob,
   SeparationOptions,
   SongTranscriptionJob,
@@ -102,6 +104,46 @@ export async function createSeparation(
   const response = await fetch(`${API_BASE}/api/separations`, {
     method: "POST",
     body,
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
+export async function searchMarketAvailability(options: {
+  title: string;
+  artist: string;
+  removeStems: string[];
+}): Promise<MarketSearchResponse> {
+  const response = await fetch(`${API_BASE}/api/market/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: options.title,
+      artist: options.artist,
+      remove_stems: options.removeStems,
+      limit: 8,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
+export async function searchAvailableScores(options: {
+  title: string;
+  artist: string;
+}): Promise<ScoreSearchResponse> {
+  const response = await fetch(`${API_BASE}/api/scores/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: options.title,
+      artist: options.artist,
+      limit: 8,
+    }),
   });
   if (!response.ok) {
     throw new Error(await readError(response));

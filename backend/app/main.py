@@ -10,6 +10,7 @@ import platform
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -37,8 +38,14 @@ from .local_separation import (
     model_catalog,
     separation_ready,
 )
+from .online_search import search_market
+from .score_search import search_scores
 from .schemas import (
     HealthResponse,
+    MarketSearchRequest,
+    MarketSearchResponse,
+    ScoreSearchRequest,
+    ScoreSearchResponse,
     SeparationCreated,
     SeparationJob,
     SeparationOptions,
@@ -129,6 +136,45 @@ def health() -> HealthResponse:
         supported_formats=sorted(ALLOWED_AUDIO_EXTENSIONS),
         max_upload_mb=MAX_UPLOAD_BYTES // (1024 * 1024),
     )
+
+
+@app.post("/api/market/search", response_model=MarketSearchResponse)
+async def market_search(options: MarketSearchRequest) -> MarketSearchResponse:
+    """根据歌曲名查询市面可用的伴奏与纯音乐版本。"""
+    try:
+        result = await search_market(
+            options.title,
+            options.artist,
+            options.remove_stems,
+            options.limit,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Apple Music 查询服务暂时不可用，请稍后重试。",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return MarketSearchResponse.model_validate(result)
+
+
+@app.post("/api/scores/search", response_model=ScoreSearchResponse)
+async def score_search(options: ScoreSearchRequest) -> ScoreSearchResponse:
+    """根据歌曲名查询已有吉他谱与六线谱。"""
+    try:
+        result = await search_scores(
+            options.title,
+            options.artist,
+            options.limit,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Ultimate Guitar 暂时无法访问，请稍后重试。",
+        ) from exc
+    except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ScoreSearchResponse.model_validate(result)
 
 
 @app.post(

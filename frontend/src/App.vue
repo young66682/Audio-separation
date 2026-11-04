@@ -16,6 +16,8 @@ import {
   createSongTranscription,
   createTranscription,
   fetchHealth,
+  searchAvailableScores,
+  searchMarketAvailability,
   separationArchiveUrl,
   separationAudioUrl,
   separationSourceAudioUrl,
@@ -29,6 +31,8 @@ import {
 } from "./api";
 import type {
   Health,
+  MarketSearchResponse,
+  ScoreSearchResponse,
   SeparationJob,
   SeparationModel,
   SeparationQuality,
@@ -67,6 +71,8 @@ const separationJob = ref<SeparationJob | null>(null);
 const selectedGuitar = ref<GuitarKey>("lead");
 const currentTime = ref(0);
 let stopEvents: (() => void) | null = null;
+let marketSearchVersion = 0;
+let scoreSearchVersion = 0;
 
 const settings = reactive({
   autoBpm: true,
@@ -88,6 +94,17 @@ const separationSettings = reactive<{
   removeStems: ["vocals"],
   quality: "balanced",
 });
+const marketQuery = reactive({
+  title: "",
+  artist: "",
+});
+const marketSearch = ref<MarketSearchResponse | null>(null);
+const marketSearching = ref(false);
+const marketSearchError = ref("");
+const lookupTab = ref<"market" | "scores">("market");
+const scoreSearch = ref<ScoreSearchResponse | null>(null);
+const scoreSearching = ref(false);
+const scoreSearchError = ref("");
 
 const activeJob = computed(() => {
   if (workMode.value === "separate") return separationJob.value;
@@ -263,8 +280,88 @@ function setFile(file: File | undefined) {
   singleJob.value = null;
   songJob.value = null;
   separationJob.value = null;
+  marketQuery.title = titleFromFilename(file.name);
+  marketQuery.artist = "";
+  searchAllLookups();
   currentTime.value = 0;
   if (workMode.value !== "song") errorMessage.value = "";
+}
+
+function searchAllLookups() {
+  void searchForAccompaniment();
+  void searchForScores();
+}
+
+function titleFromFilename(filename: string): string {
+  return filename
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_]+/g, " ")
+    .replace(
+      /[\[(](official|lyrics?|audio|video|mv|hq|hd|live|伴奏|纯音乐)[^\])]*[\])]/gi,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function searchForAccompaniment() {
+  const title = marketQuery.title.trim();
+  if (!title) return;
+  const requestVersion = ++marketSearchVersion;
+  marketSearching.value = true;
+  marketSearch.value = null;
+  marketSearchError.value = "";
+  try {
+    const response = await searchMarketAvailability({
+      title,
+      artist: marketQuery.artist.trim(),
+      removeStems:
+        workMode.value === "separate"
+          ? separationSettings.removeStems
+          : [],
+    });
+    if (requestVersion === marketSearchVersion) {
+      marketSearch.value = response;
+    }
+  } catch (error) {
+    if (requestVersion === marketSearchVersion) {
+      marketSearch.value = null;
+      marketSearchError.value =
+        error instanceof Error ? error.message : "联网伴奏查询失败";
+    }
+  } finally {
+    if (requestVersion === marketSearchVersion) {
+      marketSearching.value = false;
+    }
+  }
+}
+
+async function searchForScores() {
+  const title = marketQuery.title.trim();
+  if (!title) return;
+  const requestVersion = ++scoreSearchVersion;
+  scoreSearching.value = true;
+  scoreSearch.value = null;
+  scoreSearchError.value = "";
+  try {
+    const response = await searchAvailableScores({
+      title,
+      artist: marketQuery.artist.trim(),
+    });
+    if (requestVersion === scoreSearchVersion) {
+      scoreSearch.value = response;
+    }
+  } catch (error) {
+    if (requestVersion === scoreSearchVersion) {
+      scoreSearch.value = null;
+      scoreSearchError.value =
+        error instanceof Error ? error.message : "联网曲谱查询失败";
+    }
+  } finally {
+    if (requestVersion === scoreSearchVersion) {
+      scoreSearching.value = false;
+    }
+  }
 }
 
 function onFileInput(event: Event) {
@@ -459,34 +556,239 @@ function selectGuitar(key: GuitarKey) {
               <span>十六分音符量化</span>
             </template>
           </div>
-          <div class="mode-switch" role="tablist" aria-label="输入模式">
-            <button
-              type="button"
-              :class="{ active: workMode === 'separate' }"
-              :disabled="isWorking"
-              @click="setMode('separate')"
-            >
-              <strong>分离与伴奏</strong>
-              <small>本地 Demucs · 不上传</small>
-            </button>
-            <button
-              type="button"
-              :class="{ active: workMode === 'song' }"
-              :disabled="isWorking"
-              @click="setMode('song')"
-            >
-              <strong>整曲双吉他</strong>
-              <small>MVSEP 云端分离 · 音频会上传</small>
-            </button>
-            <button
-              type="button"
-              :class="{ active: workMode === 'guitar' }"
-              :disabled="isWorking"
-              @click="setMode('guitar')"
-            >
-              <strong>单吉他音轨</strong>
-              <small>完全本地 · 已有 stem</small>
-            </button>
+          <div class="hero-tools">
+            <div class="mode-switch" role="tablist" aria-label="输入模式">
+              <button
+                type="button"
+                :class="{ active: workMode === 'separate' }"
+                :disabled="isWorking"
+                @click="setMode('separate')"
+              >
+                <span class="mode-index">01</span>
+                <span class="mode-copy">
+                  <strong>分离与伴奏</strong>
+                  <small>本地 Demucs · 不上传</small>
+                </span>
+                <span class="mode-arrow">→</span>
+              </button>
+              <button
+                type="button"
+                :class="{ active: workMode === 'song' }"
+                :disabled="isWorking"
+                @click="setMode('song')"
+              >
+                <span class="mode-index">02</span>
+                <span class="mode-copy">
+                  <strong>整曲双吉他</strong>
+                  <small>MVSEP 云端分离 · 音频会上传</small>
+                </span>
+                <span class="mode-arrow">→</span>
+              </button>
+              <button
+                type="button"
+                :class="{ active: workMode === 'guitar' }"
+                :disabled="isWorking"
+                @click="setMode('guitar')"
+              >
+                <span class="mode-index">03</span>
+                <span class="mode-copy">
+                  <strong>单吉他音轨</strong>
+                  <small>完全本地 · 已有 stem</small>
+                </span>
+                <span class="mode-arrow">→</span>
+              </button>
+            </div>
+
+            <section class="market-card" aria-live="polite">
+              <div class="market-heading">
+                <div>
+                  <span class="eyebrow">Online market check</span>
+                  <h2>{{ lookupTab === "market" ? "市面伴奏速查" : "现有曲谱速查" }}</h2>
+                </div>
+                <span class="market-source">
+                  {{ lookupTab === "market" ? "APPLE MUSIC" : "弹琴吧 · 国内" }}
+                </span>
+              </div>
+              <div class="lookup-tabs" role="tablist" aria-label="联网速查类型">
+                <button
+                  type="button"
+                  :class="{ active: lookupTab === 'market' }"
+                  @click="lookupTab = 'market'"
+                >
+                  伴奏
+                  <span>{{ marketSearch?.suggestions.length ?? 0 }}</span>
+                </button>
+                <button
+                  type="button"
+                  :class="{ active: lookupTab === 'scores' }"
+                  @click="lookupTab = 'scores'"
+                >
+                  曲谱
+                  <span>{{ scoreSearch?.suggestions.length ?? 0 }}</span>
+                </button>
+              </div>
+              <form class="market-form" @submit.prevent="searchAllLookups">
+                <label>
+                  <span>歌曲名</span>
+                  <input
+                    v-model="marketQuery.title"
+                    type="text"
+                    maxlength="200"
+                    placeholder="上传后自动识别文件名"
+                  />
+                </label>
+                <label>
+                  <span>艺人（可选）</span>
+                  <input
+                    v-model="marketQuery.artist"
+                    type="text"
+                    maxlength="200"
+                    placeholder="例如：周杰伦"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  class="market-search-button"
+                  :disabled="marketSearching || scoreSearching || !marketQuery.title.trim()"
+                >
+                  <span v-if="marketSearching || scoreSearching" class="spinner dark" />
+                  {{ marketSearching || scoreSearching ? "查询中" : "联网查询" }}
+                </button>
+              </form>
+
+              <p class="market-hint">
+                {{
+                  lookupTab === "market"
+                    ? "搜索 Backing Track、Karaoke、Instrumental 和指定乐器去轨版本。"
+                    : "优先搜索弹琴吧等中文曲谱，国际谱库作为备用入口。"
+                }}
+              </p>
+              <p
+                v-if="lookupTab === 'market' && marketSearchError"
+                class="market-error"
+              >
+                {{ marketSearchError }}
+              </p>
+              <div
+                v-else-if="lookupTab === 'market' && marketSearch?.suggestions.length"
+                class="market-results"
+              >
+                <article
+                  v-for="item in marketSearch.suggestions"
+                  :key="item.id"
+                  class="market-result"
+                >
+                  <img
+                    v-if="item.artwork_url"
+                    :src="item.artwork_url"
+                    :alt="`${item.album || item.title} 封面`"
+                    loading="lazy"
+                  />
+                  <div class="market-result-copy">
+                    <span class="market-kind">{{ item.kind }}</span>
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.artist }}<template v-if="item.album"> · {{ item.album }}</template></small>
+                    <audio
+                      v-if="item.preview_url"
+                      :src="item.preview_url"
+                      controls
+                      preload="none"
+                    />
+                  </div>
+                  <a
+                    :href="item.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    查看 ↗
+                  </a>
+                </article>
+              </div>
+              <div
+                v-else-if="lookupTab === 'market' && marketSearch && !marketSearching"
+                class="market-empty"
+              >
+                暂未找到现成伴奏。可以调整歌曲名或艺人后重新查询，也可以直接使用本地分离生成。
+              </div>
+              <div
+                v-else-if="lookupTab === 'market' && !marketSearching"
+                class="market-empty"
+              >
+                选择歌曲后会自动联网查询；也可先输入歌名。
+              </div>
+
+              <p
+                v-if="lookupTab === 'scores' && scoreSearchError"
+                class="market-error"
+              >
+                {{ scoreSearchError }}
+              </p>
+              <div
+                v-else-if="lookupTab === 'scores' && scoreSearch?.suggestions.length"
+                class="market-results score-results"
+              >
+                <article
+                  v-for="(item, index) in scoreSearch.suggestions"
+                  :key="item.id"
+                  class="market-result score-result"
+                  :class="{ 'best-match': index === 0 }"
+                >
+                  <span class="score-type">
+                    <b>{{ item.type }}</b>
+                    <small v-if="index === 0">最相关</small>
+                  </span>
+                  <div class="market-result-copy">
+                    <strong>{{ item.title }}</strong>
+                    <small>
+                      {{ item.artist }}
+                      <template v-if="item.meta"> · {{ item.meta }}</template>
+                      <template v-if="item.version"> · 制谱 {{ item.version }}</template>
+                      <template v-if="item.rating > 0">
+                        · ★ {{ item.rating.toFixed(1) }}
+                      </template>
+                      <template v-if="item.votes > 0">
+                        · {{ item.votes }} 票
+                      </template>
+                    </small>
+                  </div>
+                  <a
+                    :href="item.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    打开曲谱 ↗
+                  </a>
+                </article>
+              </div>
+              <div
+                v-else-if="lookupTab === 'scores' && scoreSearch && !scoreSearching"
+                class="market-empty"
+              >
+                暂未找到可直接打开的曲谱。可以使用下方其他谱库继续搜索，或上传音频自动扒谱。
+              </div>
+              <div
+                v-else-if="lookupTab === 'scores' && !scoreSearching"
+                class="market-empty"
+              >
+                选择歌曲后会自动查询现成曲谱；也可先输入歌名。
+              </div>
+
+              <div
+                v-if="lookupTab === 'scores' && scoreSearch?.libraries.length"
+                class="score-libraries"
+              >
+                <span>其他谱库</span>
+                <a
+                  v-for="library in scoreSearch.libraries"
+                  :key="library.name"
+                  :href="library.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {{ library.name }} ↗
+                </a>
+              </div>
+            </section>
           </div>
         </div>
 

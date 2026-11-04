@@ -142,6 +142,49 @@ export interface SeparationJob {
   revision: number;
 }
 
+export interface MarketSuggestion {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  kind: string;
+  url: string;
+  preview_url: string | null;
+  artwork_url: string | null;
+  relevance: number;
+}
+
+export interface MarketSearchResponse {
+  provider: string;
+  queries: string[];
+  suggestions: MarketSuggestion[];
+}
+
+export interface ScoreSuggestion {
+  id: string;
+  title: string;
+  artist: string;
+  type: string;
+  version: string;
+  rating: number;
+  votes: number;
+  url: string;
+  provider: string;
+  meta: string;
+}
+
+export interface ScoreLibrary {
+  name: string;
+  url: string;
+}
+
+export interface ScoreSearchResponse {
+  provider: string;
+  query: string;
+  suggestions: ScoreSuggestion[];
+  libraries: ScoreLibrary[];
+}
+
 export interface Health {
   status: string;
   python: string;

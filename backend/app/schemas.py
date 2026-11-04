@@ -110,6 +110,62 @@ class SeparationJob(BaseModel):
     revision: int = 0
 
 
+class MarketSearchRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    artist: str = Field(default="", max_length=200)
+    remove_stems: list[str] = Field(default_factory=list)
+    limit: int = Field(default=8, ge=1, le=12)
+
+
+class MarketSuggestion(BaseModel):
+    id: str
+    title: str
+    artist: str
+    album: str
+    kind: str
+    url: str
+    preview_url: str | None = None
+    artwork_url: str | None = None
+    relevance: int = 0
+
+
+class MarketSearchResponse(BaseModel):
+    provider: str
+    queries: list[str]
+    suggestions: list[MarketSuggestion]
+
+
+class ScoreSearchRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    artist: str = Field(default="", max_length=200)
+    limit: int = Field(default=8, ge=1, le=12)
+
+
+class ScoreSuggestion(BaseModel):
+    id: str
+    title: str
+    artist: str
+    type: str
+    version: str
+    rating: float
+    votes: int
+    url: str
+    provider: str
+    meta: str = ""
+
+
+class ScoreLibrary(BaseModel):
+    name: str
+    url: str
+
+
+class ScoreSearchResponse(BaseModel):
+    provider: str
+    query: str
+    suggestions: list[ScoreSuggestion]
+    libraries: list[ScoreLibrary]
+
+
 class GuitarPartResult(BaseModel):
     key: Literal["lead", "rhythm"]
     label: str
