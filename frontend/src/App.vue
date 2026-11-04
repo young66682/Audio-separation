@@ -1,29 +1,48 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import GuitarScore from "./components/GuitarScore.vue";
+import {
+  computed,
+  defineAsyncComponent,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import TabSheet from "./components/TabSheet.vue";
 import {
   artifactUrl,
   audioUrl,
+  createSeparation,
   createSongTranscription,
   createTranscription,
   fetchHealth,
+  separationArchiveUrl,
+  separationAudioUrl,
+  separationSourceAudioUrl,
   songArchiveUrl,
   songArtifactUrl,
   songAudioUrl,
   songScoreUrl,
   subscribeToJob,
+  subscribeToSeparationJob,
   subscribeToSongJob,
 } from "./api";
 import type {
   Health,
+  SeparationJob,
+  SeparationModel,
+  SeparationQuality,
   SongTranscriptionJob,
   TranscriptionJob,
   TranscriptionResult,
 } from "./types";
 
-type WorkMode = "song" | "guitar";
+type WorkMode = "separate" | "song" | "guitar";
 type GuitarKey = "lead" | "rhythm";
+
+const GuitarScore = defineAsyncComponent(
+  () => import("./components/GuitarScore.vue"),
+);
 
 const tuningPresets = [
   { label: "标准调弦", value: "E2,A2,D3,G3,B3,E4" },
@@ -41,9 +60,10 @@ const dragging = ref(false);
 const submitting = ref(false);
 const errorMessage = ref("");
 const health = ref<Health | null>(null);
-const workMode = ref<WorkMode>("song");
+const workMode = ref<WorkMode>("separate");
 const singleJob = ref<TranscriptionJob | null>(null);
 const songJob = ref<SongTranscriptionJob | null>(null);
+const separationJob = ref<SeparationJob | null>(null);
 const selectedGuitar = ref<GuitarKey>("lead");
 const currentTime = ref(0);
 let stopEvents: (() => void) | null = null;
@@ -59,10 +79,27 @@ const settings = reactive({
   minVelocity: 0.4,
 });
 
-const activeJob = computed(() => (workMode.value === "song" ? songJob.value : singleJob.value));
+const separationSettings = reactive<{
+  model: string;
+  removeStems: string[];
+  quality: SeparationQuality;
+}>({
+  model: "htdemucs",
+  removeStems: ["vocals"],
+  quality: "balanced",
+});
+
+const activeJob = computed(() => {
+  if (workMode.value === "separate") return separationJob.value;
+  if (workMode.value === "song") return songJob.value;
+  return singleJob.value;
+});
 const singleResult = computed(() => singleJob.value?.result ?? null);
 const songResult = computed(() => songJob.value?.result ?? null);
-const hasResult = computed(() => Boolean(singleResult.value || songResult.value));
+const separationResult = computed(() => separationJob.value?.result ?? null);
+const hasResult = computed(() =>
+  Boolean(singleResult.value || songResult.value || separationResult.value),
+);
 const isWorking = computed(
   () =>
     submitting.value ||
@@ -70,12 +107,28 @@ const isWorking = computed(
     activeJob.value?.status === "running",
 );
 const cloudReady = computed(() => Boolean(health.value?.cloud_separation_ready));
-const startDisabled = computed(
+const localSeparationReady = computed(() =>
+  Boolean(health.value?.local_separation_ready),
+);
+const separationModels = computed<SeparationModel[]>(
+  () => health.value?.separation_models ?? [],
+);
+const selectedSeparationModel = computed(
   () =>
-    !selectedFile.value ||
-    isWorking.value ||
-    !health.value?.transcription_ready ||
-    (workMode.value === "song" && !cloudReady.value),
+    separationModels.value.find(
+      (model) => model.key === separationSettings.model,
+    ) ?? separationModels.value[0] ?? null,
+);
+const availableSeparationStems = computed(
+  () => selectedSeparationModel.value?.stems ?? [],
+);
+const startDisabled = computed(
+  () => {
+    if (!selectedFile.value || isWorking.value) return true;
+    if (workMode.value === "separate") return !localSeparationReady.value;
+    if (!health.value?.transcription_ready) return true;
+    return workMode.value === "song" && !cloudReady.value;
+  },
 );
 const acceptedFormats = computed(
   () => health.value?.supported_formats.map((format) => format.slice(1)).join(", ") ?? "音频文件",
@@ -147,10 +200,32 @@ watch(selectedGuitar, () => {
   currentTime.value = 0;
 });
 
+watch(
+  availableSeparationStems,
+  (stems) => {
+    const validKeys = new Set(stems.map((stem) => stem.key));
+    separationSettings.removeStems = separationSettings.removeStems.filter(
+      (key) => validKeys.has(key),
+    );
+    if (separationSettings.removeStems.length === 0 && stems.length > 0) {
+      separationSettings.removeStems = [
+        stems.find((stem) => stem.key === "vocals")?.key ?? stems[0].key,
+      ];
+    }
+  },
+  { immediate: true },
+);
+
 async function refreshHealth() {
   try {
     health.value = await fetchHealth();
-    if (!health.value.transcription_ready) {
+    if (workMode.value === "separate" && !health.value.local_separation_ready) {
+      errorMessage.value =
+        "本地分离引擎未就绪，请安装后端 Demucs 与 ffmpeg。";
+    } else if (
+      workMode.value !== "separate" &&
+      !health.value.transcription_ready
+    ) {
       errorMessage.value = "转录引擎未就绪，请检查 Python 3.11 后端环境。";
     } else {
       errorMessage.value = "";
@@ -165,8 +240,15 @@ function setMode(mode: WorkMode) {
   workMode.value = mode;
   singleJob.value = null;
   songJob.value = null;
+  separationJob.value = null;
   currentTime.value = 0;
   errorMessage.value = "";
+  if (mode === "separate" && !localSeparationReady.value) {
+    errorMessage.value =
+      "本地分离引擎未就绪，请安装后端 Demucs 与 ffmpeg。";
+  } else if (mode !== "separate" && !health.value?.transcription_ready) {
+    errorMessage.value = "转录引擎未就绪，请检查 Python 3.11 后端环境。";
+  }
 }
 
 function chooseFile() {
@@ -180,8 +262,9 @@ function setFile(file: File | undefined) {
   previewUrl.value = URL.createObjectURL(file);
   singleJob.value = null;
   songJob.value = null;
+  separationJob.value = null;
   currentTime.value = 0;
-  if (workMode.value === "guitar") errorMessage.value = "";
+  if (workMode.value !== "song") errorMessage.value = "";
 }
 
 function onFileInput(event: Event) {
@@ -209,7 +292,31 @@ async function startTranscription() {
   };
 
   try {
-    if (workMode.value === "song") {
+    if (workMode.value === "separate") {
+      const created = await createSeparation(selectedFile.value, {
+        model: selectedSeparationModel.value?.key ?? separationSettings.model,
+        remove_stems: separationSettings.removeStems,
+        quality: separationSettings.quality,
+      });
+      stopEvents = subscribeToSeparationJob(
+        created.job_id,
+        (job) => {
+          separationJob.value = job;
+          submitting.value = false;
+          if (job.status === "failed") {
+            errorMessage.value = job.error ?? "音轨分离失败";
+          }
+        },
+        () => {
+          stopEvents?.();
+          stopEvents = null;
+        },
+        (message) => {
+          errorMessage.value = message;
+          submitting.value = false;
+        },
+      );
+    } else if (workMode.value === "song") {
       const created = await createSongTranscription(selectedFile.value, options);
       stopEvents = subscribeToSongJob(
         created.job_id,
@@ -261,6 +368,7 @@ function reset() {
   stopEvents = null;
   singleJob.value = null;
   songJob.value = null;
+  separationJob.value = null;
   currentTime.value = 0;
   errorMessage.value = "";
 }
@@ -285,31 +393,51 @@ function selectGuitar(key: GuitarKey) {
         </span>
         <span>
           <strong>Fretline</strong>
-          <small>吉他扒谱工作台</small>
+          <small>扒谱与器乐分离工作台</small>
         </span>
       </a>
-      <div class="system-state" :class="{ offline: !health?.transcription_ready }">
+      <div
+        class="system-state"
+        :class="{
+          offline:
+            workMode === 'separate'
+              ? !localSeparationReady
+              : !health?.transcription_ready,
+        }"
+      >
         <span class="state-dot" />
-        <template v-if="health?.transcription_ready">
-          转录引擎就绪
-          <span class="state-separator">/</span>
-          {{ cloudReady ? "双吉他云端可用" : "仅本地单吉他" }}
+        <template v-if="workMode === 'separate'">
+          {{ localSeparationReady ? "本地分离引擎就绪" : "本地分离引擎未就绪" }}
+          <span v-if="health?.separation_device" class="state-separator">/</span>
+          {{ health?.separation_device?.toUpperCase() }}
         </template>
-        <template v-else>转录引擎未就绪</template>
+        <template v-else-if="health?.transcription_ready">
+          扒谱引擎就绪
+          <span class="state-separator">/</span>
+          {{ cloudReady ? "双吉他云端可用" : "本地模式" }}
+        </template>
+        <template v-else>扒谱引擎未就绪</template>
       </div>
     </header>
 
     <main>
       <section v-if="!hasResult" class="hero">
         <div class="hero-copy">
-          <span class="eyebrow">Audio → lead + rhythm → tabs</span>
-          <h1 v-if="workMode === 'song'">
+          <span class="eyebrow">Separate · remove · transcribe</span>
+          <h1 v-if="workMode === 'separate'">
+            拆开整首歌，<br /><em>做你需要的伴奏。</em>
+          </h1>
+          <h1 v-else-if="workMode === 'song'">
             上传整首歌，<br /><em>生成双吉他谱。</em>
           </h1>
           <h1 v-else>
             上传吉他音轨，<br /><em>生成六线谱。</em>
           </h1>
-          <p v-if="workMode === 'song'">
+          <p v-if="workMode === 'separate'">
+            在本地分离人声、鼓、贝斯、吉他、钢琴和其他乐器。勾选任意乐器，
+            自动生成“去掉该乐器”的伴奏，并保留全部独立音轨。
+          </p>
+          <p v-else-if="workMode === 'song'">
             先由 MVSEP 把整曲分离成主音吉他、节奏吉他和伴奏，再分别在本地识别音高、
             分配琴弦和品丝。每首歌会得到两套独立六线谱。
           </p>
@@ -318,12 +446,29 @@ function selectGuitar(key: GuitarKey) {
             并导出六线谱、MIDI 与 MusicXML。
           </p>
           <div class="signal-strip">
-            <span>{{ workMode === "song" ? "Lead / Rhythm 双源分离" : "Basic Pitch 多音识别" }}</span>
-            <span>自动测速</span>
-            <span>六弦约束</span>
-            <span>十六分音符量化</span>
+            <template v-if="workMode === 'separate'">
+              <span>Demucs 本地分离</span>
+              <span>4 / 6 轨模型</span>
+              <span>指定乐器伴奏</span>
+              <span>ZIP 批量导出</span>
+            </template>
+            <template v-else>
+              <span>{{ workMode === "song" ? "Lead / Rhythm 双源分离" : "Basic Pitch 多音识别" }}</span>
+              <span>自动测速</span>
+              <span>六弦约束</span>
+              <span>十六分音符量化</span>
+            </template>
           </div>
           <div class="mode-switch" role="tablist" aria-label="输入模式">
+            <button
+              type="button"
+              :class="{ active: workMode === 'separate' }"
+              :disabled="isWorking"
+              @click="setMode('separate')"
+            >
+              <strong>分离与伴奏</strong>
+              <small>本地 Demucs · 不上传</small>
+            </button>
             <button
               type="button"
               :class="{ active: workMode === 'song' }"
@@ -349,10 +494,20 @@ function selectGuitar(key: GuitarKey) {
           <div class="card-heading">
             <span>01</span>
             <div>
-              <h2>{{ workMode === "song" ? "导入整首歌曲" : "导入吉他音轨" }}</h2>
+              <h2>
+                {{
+                  workMode === "separate"
+                    ? "导入要处理的歌曲"
+                    : workMode === "song"
+                      ? "导入整首歌曲"
+                      : "导入吉他音轨"
+                }}
+              </h2>
               <p>
                 {{
-                  workMode === "song"
+                  workMode === "separate"
+                    ? "模型首次使用时会自动下载，之后可离线运行"
+                    : workMode === "song"
                     ? "免费账号单曲上限 10 分钟 / 100 MB"
                     : "建议使用分离后的 guitar stem 或独奏录音"
                 }}
@@ -394,7 +549,67 @@ function selectGuitar(key: GuitarKey) {
             <button type="button" @click="refreshHealth">重新检测</button>
           </div>
 
-          <div class="settings-grid">
+          <div v-if="workMode === 'separate' && !localSeparationReady" class="config-notice">
+            <span>本地分离未就绪</span>
+            <p>
+              需要后端安装 Demucs、PyTorch 和 ffmpeg。启动时若缺少模型，
+              首次分离会自动下载。
+            </p>
+            <button type="button" @click="refreshHealth">重新检测</button>
+          </div>
+
+          <div v-if="workMode === 'separate'" class="separation-settings">
+            <label class="setting wide">
+              <span>分离模型</span>
+              <select v-model="separationSettings.model" :disabled="isWorking">
+                <option
+                  v-for="model in separationModels"
+                  :key="model.key"
+                  :value="model.key"
+                >
+                  {{ model.label }} · {{ model.memory_hint }}
+                </option>
+              </select>
+              <small class="setting-help">
+                {{ selectedSeparationModel?.description }}
+              </small>
+            </label>
+
+            <div class="setting wide">
+              <span>要移除并生成对应伴奏的乐器</span>
+              <div class="stem-picker">
+                <label
+                  v-for="stem in availableSeparationStems"
+                  :key="stem.key"
+                  class="stem-option"
+                  :class="{ active: separationSettings.removeStems.includes(stem.key) }"
+                >
+                  <input
+                    v-model="separationSettings.removeStems"
+                    type="checkbox"
+                    :value="stem.key"
+                    :disabled="isWorking"
+                  />
+                  <strong>{{ stem.label }}</strong>
+                  <small>生成去{{ stem.label }}伴奏</small>
+                </label>
+              </div>
+              <small class="setting-help">
+                每勾选一项会额外生成一个伴奏文件；独立音轨始终全部保留。
+              </small>
+            </div>
+
+            <label class="setting wide">
+              <span>处理质量</span>
+              <select v-model="separationSettings.quality" :disabled="isWorking">
+                <option value="fast">快速 · CPU 最省时间</option>
+                <option value="balanced">均衡 · 推荐</option>
+                <option value="best">高质量 · 最慢</option>
+              </select>
+            </label>
+          </div>
+
+          <div v-else class="settings-grid">
             <label class="setting wide">
               <span>调弦</span>
               <select v-model="settings.tuning" :disabled="isWorking">
@@ -498,10 +713,14 @@ function selectGuitar(key: GuitarKey) {
             <span v-if="isWorking" class="spinner" />
             {{
               isWorking
-                ? workMode === "song"
+                ? workMode === "separate"
+                  ? "正在分离并生成伴奏…"
+                  : workMode === "song"
                   ? "正在分离并扒谱…"
                   : "正在扒谱…"
-                : workMode === "song"
+                : workMode === "separate"
+                  ? "开始分离并生成伴奏"
+                  : workMode === "song"
                   ? "分离双吉他的六线谱"
                   : "开始生成六线谱"
             }}
@@ -518,6 +737,171 @@ function selectGuitar(key: GuitarKey) {
           </div>
 
           <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+        </div>
+      </section>
+
+      <section
+        v-else-if="separationResult && separationJob"
+        class="result-view"
+      >
+        <div class="result-heading">
+          <div>
+            <span class="eyebrow">Separation & accompaniment complete</span>
+            <h1>{{ separationResult.title }}</h1>
+            <p>
+              {{ separationResult.stems.length }} 条独立音轨 ·
+              {{ separationResult.accompaniments.length }} 个指定乐器伴奏 ·
+              {{ separationResult.model.label }}
+            </p>
+          </div>
+          <div class="result-actions">
+            <button type="button" class="ghost-button" @click="reset">
+              处理另一首歌
+            </button>
+            <a
+              class="download-chip archive-chip"
+              :href="separationArchiveUrl(separationJob.id)"
+            >
+              ↓ 下载全部音轨 ZIP
+            </a>
+          </div>
+        </div>
+
+        <div class="separation-layout">
+          <aside class="playback-card source-summary">
+            <span class="eyebrow">Source audio</span>
+            <h2>原始歌曲</h2>
+            <audio
+              :src="separationSourceAudioUrl(separationJob.id)"
+              controls
+              preload="metadata"
+            />
+            <dl>
+              <div>
+                <dt>分离设备</dt>
+                <dd>{{ separationResult.device.toUpperCase() }}</dd>
+              </div>
+              <div>
+                <dt>处理质量</dt>
+                <dd>
+                  {{
+                    separationResult.quality === "fast"
+                      ? "快速"
+                      : separationResult.quality === "best"
+                        ? "高质量"
+                        : "均衡"
+                  }}
+                </dd>
+              </div>
+              <div>
+                <dt>音频时长</dt>
+                <dd>
+                  {{
+                    separationResult.duration_seconds
+                      ? `${Math.floor(separationResult.duration_seconds / 60)}:${String(
+                          Math.round(separationResult.duration_seconds % 60),
+                        ).padStart(2, "0")}`
+                      : "未知"
+                  }}
+                </dd>
+              </div>
+            </dl>
+            <div v-if="separationResult.warnings.length" class="warning-box">
+              <strong>需要复核</strong>
+              <p
+                v-for="warning in separationResult.warnings"
+                :key="warning"
+              >
+                {{ warning }}
+              </p>
+            </div>
+          </aside>
+
+          <div class="track-workspace">
+            <section class="track-section">
+              <div class="track-section-heading">
+                <div>
+                  <span class="eyebrow">Isolated stems</span>
+                  <h2>独立乐器音轨</h2>
+                </div>
+                <span>{{ separationResult.stems.length }} 条</span>
+              </div>
+              <div class="track-grid">
+                <article
+                  v-for="stem in separationResult.stems"
+                  :key="stem.key"
+                  class="track-card"
+                >
+                  <div class="track-card-heading">
+                    <span class="track-badge">{{ stem.key.toUpperCase() }}</span>
+                    <strong>{{ stem.label }}</strong>
+                    <small>{{ stem.audio_format.toUpperCase() }}</small>
+                  </div>
+                  <audio
+                    :src="separationAudioUrl(separationJob.id, 'stem', stem.key)"
+                    controls
+                    preload="none"
+                  />
+                  <a
+                    class="track-download"
+                    :href="separationAudioUrl(separationJob.id, 'stem', stem.key)"
+                    :download="stem.filename"
+                  >
+                    ↓ 下载{{ stem.label }}音轨
+                  </a>
+                </article>
+              </div>
+            </section>
+
+            <section class="track-section accompaniment-section">
+              <div class="track-section-heading">
+                <div>
+                  <span class="eyebrow">Custom accompaniment</span>
+                  <h2>去掉指定乐器的伴奏</h2>
+                </div>
+                <span>{{ separationResult.accompaniments.length }} 个</span>
+              </div>
+              <div
+                v-if="separationResult.accompaniments.length"
+                class="track-grid"
+              >
+                <article
+                  v-for="track in separationResult.accompaniments"
+                  :key="track.key"
+                  class="track-card accompaniment-card"
+                >
+                  <div class="track-card-heading">
+                    <span class="track-badge">MINUS {{ track.removed_stem.toUpperCase() }}</span>
+                    <strong>{{ track.label }}</strong>
+                    <small>{{ track.audio_format.toUpperCase() }}</small>
+                  </div>
+                  <audio
+                    :src="separationAudioUrl(
+                      separationJob.id,
+                      'accompaniment',
+                      track.key,
+                    )"
+                    controls
+                    preload="none"
+                  />
+                  <a
+                    class="track-download"
+                    :href="separationAudioUrl(
+                      separationJob.id,
+                      'accompaniment',
+                      track.key,
+                    )"
+                    :download="track.filename"
+                  >
+                    ↓ 下载{{ track.label }}
+                  </a>
+                </article>
+              </div>
+              <div v-else class="empty-accompaniment">
+                未勾选要移除的乐器。返回后重新选择即可生成指定伴奏。
+              </div>
+            </section>
+          </div>
         </div>
       </section>
 
@@ -693,8 +1077,8 @@ function selectGuitar(key: GuitarKey) {
     </main>
 
     <footer>
-      <span>Fretline · local-first transcription</span>
-      <span>AI 结果仅供扒谱初稿，请结合原曲校正节奏、声部与指法。</span>
+      <span>Fretline · local-first separation & transcription</span>
+      <span>分离与扒谱结果均为 AI 初稿，发布或演出前请人工复核。</span>
     </footer>
   </div>
 </template>

@@ -1,4 +1,4 @@
-"""Runtime paths and upload limits."""
+"""运行时目录、模型配置与上传限制。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ load_dotenv(BACKEND_DIR / ".env")
 DATA_DIR = Path(os.getenv("GUITAR_TAB_DATA_DIR", BACKEND_DIR / "data")).resolve()
 JOBS_DIR = DATA_DIR / "jobs"
 SONG_JOBS_DIR = JOBS_DIR / "songs"
+SEPARATION_JOBS_DIR = JOBS_DIR / "separations"
 FRONTEND_DIST_DIR = PROJECT_DIR / "frontend" / "dist"
 
 ALLOWED_AUDIO_EXTENSIONS = {
@@ -47,9 +48,15 @@ MVSEP_USE_ENV_PROXY = os.getenv("MVSEP_USE_ENV_PROXY", "false").lower() in {
     "yes",
 }
 
+DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "auto").strip().lower()
+DEMUCS_JOB_TIMEOUT_SECONDS = int(
+    os.getenv("DEMUCS_JOB_TIMEOUT_SECONDS", "7200")
+)
+
 
 def ensure_runtime_directories() -> None:
-    """Create directories used by the local job runner."""
+    """创建本地任务运行器所需的目录。"""
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     SONG_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    SEPARATION_JOBS_DIR.mkdir(parents=True, exist_ok=True)
 

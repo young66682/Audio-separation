@@ -1,91 +1,42 @@
-# Audio Separation
+# Fretline
 
-A professional audio source separation tool that uses deep learning (Demucs) to extract individual stems from audio files.
+Fretline is a local-first FastAPI and Vue workspace for stem separation, custom
+instrumental accompaniment, and guitar transcription.
 
 ## Features
 
-- **Stem Separation**: Separate audio into multiple stems (vocals, drums, bass, other)
-- **Multiple Model Support**: Support for various Demucs models (default: htdemucs)
-- **MP3 Export**: Convert separated tracks to MP3 format with configurable bitrate
-- **User-Friendly Interface**: Built with Streamlit for easy interaction
-- **Progress Tracking**: Real-time progress display during separation
+- Local Demucs separation with four- and six-stem models.
+- Isolated vocals, drums, bass, guitar, piano, and other instruments.
+- Select any instrument to create an accompaniment that removes it.
+- Batch ZIP export with stems, accompaniments, manifest, and source audio.
+- Local guitar transcription to tablature, MIDI, MusicXML, and JSON.
+- Optional MVSEP lead/rhythm dual-guitar transcription.
+- Automatic CPU, CUDA, and Apple MPS device selection.
 
-## Installation
+## Quick start
 
-1. Clone the repository:
-```bash
-git clone https://gitee.com/zhaoy515/audio_separation.git
-cd audio_separation
+Requirements: Python 3.11, Node.js 20+, uv, FFmpeg, and ffprobe in `PATH`.
+
+```powershell
+.\setup.ps1
+.\start.ps1
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+Open <http://127.0.0.1:8000>. Model weights are downloaded on first use and
+cached for later offline runs.
+
+For UI development:
+
+```powershell
+cd frontend
+npm run dev
 ```
 
-3. Install FFmpeg (required for MP3 conversion):
-- **Ubuntu/Debian**: `sudo apt install ffmpeg`
-- **macOS**: `brew install ffmpeg`
-- **Windows**: Download from [FFmpeg website](https://ffmpeg.org/download.html)
+## Accompaniment behavior
 
-## Usage
+Removing an instrument means separating the remaining stems and mixing them
+back together. It is not perfect phase cancellation; bleed can remain with
+distorted instruments, reverb, or overlapping stereo positions.
 
-Run the application:
-```bash
-streamlit run mainService.py
-```
-
-Or directly:
-```bash
-python mainService.py
-```
-
-### Using the Web Interface
-
-1. Select an audio file (WAV, MP3, FLAC, etc.)
-2. Choose the stems you want to extract
-3. Select the model (default: htdemucs)
-4. Click "Start Separation"
-5. Download the separated stems
-
-### Programmatic Usage
-
-```python
-from mainService import StemSeparator, MP3Exporter
-from pathlib import Path
-
-# Separate audio into stems
-separator = StemSeparator(model_name="htdemucs")
-results = separator.separate(
-    input_file=Path("input.wav"),
-    selected_stems=["vocals", "drums", "bass", "other"],
-    output_dir=Path("output")
-)
-
-# Convert to MP3
-exporter = MP3Exporter(output_dir="output", bitrate=192)
-mp3_path = exporter.convert_to_mp3(results["vocals"], "vocals")
-```
-
-## Available Stems
-
-- **Vocals**: Vocal tracks
-- **Drums**: Drum/percussion tracks
-- **Bass**: Bass tracks
-- **Other**: Other instruments
-
-## Requirements
-
-See `requirements.txt` for full dependency list. Key dependencies:
-- demucs (audio source separation)
-- streamlit (web interface)
-- ffmpeg-python (MP3 conversion)
-
-## License
-
-See the `LICENSE` file for details.
-
-## Acknowledgments
-
-- [Demucs](https://github.com/facebookresearch/demucs) - Deep audio separation model
-- [FFmpeg](https://ffmpeg.org/) - Audio format conversion
+See [README.md](README.md) for model selection, configuration, API endpoints,
+testing, and output paths.

@@ -1,4 +1,10 @@
-import type { Health, SongTranscriptionJob, TranscriptionJob } from "./types";
+import type {
+  Health,
+  SeparationJob,
+  SeparationOptions,
+  SongTranscriptionJob,
+  TranscriptionJob,
+} from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
@@ -83,6 +89,26 @@ export async function createSongTranscription(
   return response.json();
 }
 
+export async function createSeparation(
+  file: File,
+  options: SeparationOptions,
+): Promise<{ job_id: string }> {
+  const body = new FormData();
+  body.append("audio", file);
+  body.append("model", options.model);
+  body.append("remove_stems", options.remove_stems.join(","));
+  body.append("quality", options.quality);
+
+  const response = await fetch(`${API_BASE}/api/separations`, {
+    method: "POST",
+    body,
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
 export function jobEndpoint(jobId: string, suffix = ""): string {
   return `${API_BASE}/api/transcriptions/${jobId}${suffix}`;
 }
@@ -115,6 +141,26 @@ export function songScoreUrl(jobId: string): string {
   return songEndpoint(jobId, "/score");
 }
 
+export function separationEndpoint(jobId: string, suffix = ""): string {
+  return `${API_BASE}/api/separations/${jobId}${suffix}`;
+}
+
+export function separationSourceAudioUrl(jobId: string): string {
+  return separationEndpoint(jobId, "/audio/source");
+}
+
+export function separationAudioUrl(
+  jobId: string,
+  kind: "stem" | "accompaniment",
+  stem: string,
+): string {
+  return separationEndpoint(jobId, `/audio/${kind}/${stem}`);
+}
+
+export function separationArchiveUrl(jobId: string): string {
+  return separationEndpoint(jobId, "/archive");
+}
+
 export function subscribeToJob(
   jobId: string,
   onJob: (job: TranscriptionJob) => void,
@@ -144,6 +190,26 @@ export function subscribeToSongJob(
   const source = new EventSource(songEndpoint(jobId, "/events"));
   const handleProgress = (event: MessageEvent<string>) => {
     onJob(JSON.parse(event.data) as SongTranscriptionJob);
+  };
+  source.addEventListener("progress", handleProgress as EventListener);
+  source.addEventListener("done", onDone);
+  source.addEventListener("error", () => {
+    if (source.readyState === EventSource.CLOSED) {
+      onError("实时进度连接已断开");
+    }
+  });
+  return () => source.close();
+}
+
+export function subscribeToSeparationJob(
+  jobId: string,
+  onJob: (job: SeparationJob) => void,
+  onDone: () => void,
+  onError: (message: string) => void,
+): () => void {
+  const source = new EventSource(separationEndpoint(jobId, "/events"));
+  const handleProgress = (event: MessageEvent<string>) => {
+    onJob(JSON.parse(event.data) as SeparationJob);
   };
   source.addEventListener("progress", handleProgress as EventListener);
   source.addEventListener("done", onDone);

@@ -215,7 +215,7 @@ main {
 
 .mode-switch {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 34px;
 }
@@ -337,6 +337,12 @@ main {
   margin-top: 18px;
 }
 
+.separation-settings {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+}
+
 .setting {
   display: grid;
   gap: 7px;
@@ -367,6 +373,54 @@ main {
 .setting input[type="number"]:focus,
 .setting select:focus {
   border-color: rgba(215, 242, 107, 0.55);
+}
+
+.setting-help {
+  color: #7f8e83;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.stem-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stem-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: rgba(7, 12, 9, 0.35);
+  cursor: pointer;
+  transition: 160ms ease;
+}
+
+.stem-option.active {
+  border-color: rgba(215, 242, 107, 0.5);
+  color: var(--ink);
+  background: rgba(215, 242, 107, 0.07);
+}
+
+.stem-option input {
+  grid-row: 1 / span 2;
+  margin: 0;
+  accent-color: var(--acid);
+}
+
+.stem-option strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stem-option small {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .inline-control {
@@ -986,6 +1040,136 @@ main {
   line-height: 1.55;
 }
 
+.separation-layout {
+  display: grid;
+  grid-template-columns: 285px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.source-summary {
+  position: sticky;
+  top: 24px;
+}
+
+.track-workspace {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.track-section {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(24, 34, 27, 0.88);
+}
+
+.accompaniment-section {
+  border-color: rgba(215, 242, 107, 0.24);
+  background:
+    linear-gradient(135deg, rgba(215, 242, 107, 0.055), transparent 48%),
+    rgba(24, 34, 27, 0.92);
+}
+
+.track-section-heading {
+  display: flex;
+  gap: 20px;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 17px;
+}
+
+.track-section-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.track-section-heading h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 25px;
+  font-weight: 400;
+}
+
+.track-section-heading > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.track-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.track-card {
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(8, 13, 10, 0.28);
+}
+
+.track-card-heading {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.track-card-heading strong {
+  font-size: 14px;
+}
+
+.track-card-heading small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.track-badge {
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: #142019;
+  background: var(--acid);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.accompaniment-card .track-badge {
+  color: #231c11;
+  background: var(--amber);
+}
+
+.track-card audio {
+  width: 100%;
+  height: 34px;
+  opacity: 0.82;
+}
+
+.track-download {
+  justify-self: start;
+  color: var(--acid);
+  font-size: 10px;
+  text-decoration: none;
+}
+
+.track-download:hover {
+  text-decoration: underline;
+}
+
+.empty-accompaniment {
+  padding: 26px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 footer {
   display: flex;
   justify-content: space-between;
@@ -1008,6 +1192,14 @@ footer {
 
   .result-grid {
     grid-template-columns: 1fr;
+  }
+
+  .separation-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .source-summary {
+    position: static;
   }
 
   .playback-card {
@@ -1059,6 +1251,11 @@ footer {
   }
 
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stem-picker,
+  .track-grid {
     grid-template-columns: 1fr;
   }
 

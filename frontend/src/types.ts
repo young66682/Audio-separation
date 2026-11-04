@@ -75,12 +75,82 @@ export interface SongTranscriptionJob extends JobBase {
   result: SongTranscriptionResult | null;
 }
 
+export type SeparationQuality = "fast" | "balanced" | "best";
+
+export interface SeparationStemDefinition {
+  key: string;
+  label: string;
+}
+
+export interface SeparationModel {
+  key: string;
+  label: string;
+  description: string;
+  stems: SeparationStemDefinition[];
+  memory_hint: string;
+}
+
+export interface SeparationOptions {
+  model: string;
+  remove_stems: string[];
+  quality: SeparationQuality;
+}
+
+export interface SeparationStem {
+  key: string;
+  label: string;
+  filename: string;
+  audio_format: string;
+}
+
+export interface Accompaniment {
+  key: string;
+  label: string;
+  removed_stem: string;
+  removed_label: string;
+  filename: string;
+  audio_format: string;
+}
+
+export interface SeparationResult {
+  title: string;
+  model: {
+    key: string;
+    label: string;
+  };
+  device: string;
+  quality: SeparationQuality;
+  duration_seconds: number | null;
+  stems: SeparationStem[];
+  accompaniments: Accompaniment[];
+  warnings: string[];
+  archive_filename: string | null;
+}
+
+export interface SeparationJob {
+  id: string;
+  filename: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  progress: number;
+  stage: string;
+  message: string;
+  created_at: string;
+  updated_at: string;
+  options: SeparationOptions;
+  result: SeparationResult | null;
+  error: string | null;
+  revision: number;
+}
+
 export interface Health {
   status: string;
   python: string;
   transcription_ready: boolean;
   cloud_separation_ready: boolean;
   cloud_separation_model: string;
+  local_separation_ready: boolean;
+  separation_device: string | null;
+  separation_models: SeparationModel[];
   supported_formats: string[];
   max_upload_mb: number;
 }

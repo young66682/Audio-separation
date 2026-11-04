@@ -6,6 +6,7 @@
 
 import subprocess
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -116,7 +117,7 @@ class StemSeparator:
         demucs_output = output_dir / self.model_name
 
         cmd = [
-            "python",
+            sys.executable,
             "-m",
             "demucs",
             "--out",
@@ -139,6 +140,13 @@ class StemSeparator:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=(
+                subprocess.CREATE_NO_WINDOW
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW")
+                else 0
+            ),
         )
 
         full_output: List[str] = []

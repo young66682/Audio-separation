@@ -1,93 +1,172 @@
-Based on the provided code map, I can see this is an audio source separation project. Let me create a comprehensive README for it:
+# Fretline：器乐分离、指定乐器伴奏与吉他扒谱
 
-# Audio Separation
+Fretline 是一个本地优先的 Web 工作台，把音频分离、去轨伴奏和吉他扒谱放在同一套
+FastAPI + Vue 应用中。
 
-A professional audio source separation tool that uses deep learning (Demucs) to extract individual stems from audio files.
+## 已实现功能
 
-## Features
+- 使用 Demucs 在本地分离整首歌曲，默认支持 4 轨和 6 轨模型。
+- 输出人声、鼓组、贝斯、吉他、钢琴、其他乐器等独立音轨。
+- 勾选任意乐器后，自动混合其余音轨，生成“去掉该乐器”的伴奏。
+- 多个乐器可同时勾选，每个乐器会生成一份独立伴奏。
+- 全部音轨、伴奏、清单和原始歌曲可打包为 ZIP。
+- 实时显示任务阶段和 Demucs 分离进度。
+- 单吉他音频可生成六线谱、MIDI、MusicXML 和音符 JSON。
+- 可选 MVSEP 云端双吉他路线，将歌曲拆成主音与节奏吉他后分别扒谱。
+- CPU、CUDA 和 Apple MPS 自动选择，4 轨 / 6 轨模型按内存与质量需求切换。
 
-- **Stem Separation**: Separate audio into multiple stems (vocals, drums, bass, other)
-- **Multiple Model Support**: Support for various Demucs models (default: htdemucs)
-- **MP3 Export**: Convert separated tracks to MP3 format with configurable bitrate
-- **User-Friendly Interface**: Built with Streamlit for easy interaction
-- **Progress Tracking**: Real-time progress display during separation
+## 一键安装与启动
 
-## Installation
+环境要求：
 
-1. Clone the repository:
-```bash
-git clone https://gitee.com/zhaoy515/audio_separation.git
-cd audio_separation
+- Python 3.11
+- Node.js 20+
+- [uv](https://docs.astral.sh/uv/)
+- FFmpeg 与 ffprobe，并加入 `PATH`
+
+Windows PowerShell：
+
+```powershell
+cd "G:\python\poject\Audio separation"
+.\setup.ps1
+.\start.ps1
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+安装脚本默认使用清华 PyPI 镜像；其他网络环境可指定官方源：
+
+```powershell
+.\setup.ps1 -IndexUrl https://pypi.org/simple
 ```
 
-3. Install FFmpeg (required for MP3 conversion):
-- **Ubuntu/Debian**: `sudo apt install ffmpeg`
-- **macOS**: `brew install ffmpeg`
-- **Windows**: Download from [FFmpeg website](https://ffmpeg.org/download.html)
+打开 <http://127.0.0.1:8000>。首次分离某个模型时，Demucs 会自动下载模型权重。
+之后权重会被缓存，可以离线分离。
 
-## Usage
+修改前端后重新构建并启动：
 
-Run the application:
-```bash
-streamlit run mainService.py
+```powershell
+.\start.ps1 -RebuildFrontend
 ```
 
-Or directly:
-```bash
-python mainService.py
+需要开发热重载：
+
+```powershell
+.\start.ps1 -Reload
 ```
 
-### Using the Web Interface
+## 使用方式
 
-1. Select an audio file (WAV, MP3, FLAC, etc.)
-2. Choose the stems you want to extract
-3. Select the model (default: htdemucs)
-4. Click "Start Separation"
-5. Download the separated stems
+### 分离与伴奏
 
-### Programmatic Usage
+1. 选择“分离与伴奏”。
+2. 上传歌曲并选择分离模型与处理质量。
+3. 勾选要去掉的乐器。
+4. 开始处理。
+5. 在结果页试听或下载独立音轨、指定伴奏和完整 ZIP。
 
-```python
-from mainService import StemSeparator, MP3Exporter
-from pathlib import Path
+“去掉吉他”的处理方式是：识别人声、鼓、贝斯、钢琴和其他乐器等剩余音轨，
+再把它们混合成伴奏。AI 分离不是数学上的完美反相消除，失真吉他、混响和声像重叠
+仍可能留下少量串音。
 
-# Separate audio into stems
-separator = StemSeparator(model_name="htdemucs")
-results = separator.separate(
-    input_file=Path("input.wav"),
-    selected_stems=["vocals", "drums", "bass", "other"],
-    output_dir=Path("output")
-)
+### 吉他扒谱
 
-# Convert to MP3
-exporter = MP3Exporter(output_dir="output", bitrate=192)
-mp3_path = exporter.convert_to_mp3(results["vocals"], "vocals")
+- “单吉他音轨”完全在本地识别，适合已经分离好的 guitar stem 或独奏。
+- “整曲双吉他”使用 MVSEP 云端分离，需要 Token；音频会上传到 MVSEP。
+- 两种模式均支持自动测速、调弦、变调夹、品位范围、和弦跨度和力度门槛。
+- 导出格式包括文本六线谱、MIDI、MusicXML 和原始音符事件 JSON。
+
+## 模型与性能
+
+| 模型 | 音轨 | 适用场景 |
+| --- | --- | --- |
+| `htdemucs` | 人声、鼓、贝斯、其他 | 默认，速度和内存最均衡 |
+| `htdemucs_6s` | 人声、鼓、贝斯、吉他、钢琴、其他 | 指定吉他/钢琴伴奏，速度较慢 |
+| `mdx_extra_q` | 人声、鼓、贝斯、其他 | 质量优先，CPU 上较慢 |
+
+“快速 / 均衡 / 高质量”分别控制 Demucs shifts 与 overlap。CPU 上推荐先用
+`htdemucs` + 快速模式验证流程，再用 6 轨模型精细分离。
+
+可通过 `backend/.env` 强制设备：
+
+```dotenv
+DEMUCS_DEVICE=cpu
+DEMUCS_JOB_TIMEOUT_SECONDS=7200
 ```
 
-## Available Stems
+## 云端双吉他配置（可选）
 
-- **Vocals**: Vocal tracks
-- **Drums**: Drum/percussion tracks
-- **Bass**: Bass tracks
-- **Other**: Other instruments
+复制配置并填写 MVSEP Token：
 
-## Requirements
+```powershell
+Copy-Item backend\.env.example backend\.env
+```
 
-See `requirements.txt` for full dependency list. Key dependencies:
-- demucs (audio source separation)
-- streamlit (web interface)
-- ffmpeg-python (MP3 conversion)
+```dotenv
+MVSEP_API_TOKEN=your_token
+MVSEP_WORKFLOW=guitar_first
+```
 
-## License
+修改 `.env` 后重启后端。Token 只保存在后端，不会发送给浏览器。没有 Token 时，
+本地分离和单吉他扒谱仍可正常使用。
 
-See the `LICENSE` file for details.
+## 手动开发
 
-## Acknowledgments
+后端：
 
-- [Demucs](https://github.com/facebookresearch/demucs) - Deep audio separation model
-- [FFmpeg](https://ffmpeg.org/) - Audio format conversion
+```powershell
+cd backend
+uv sync --extra dev
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+前端：
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+前端开发服务器为 <http://127.0.0.1:5173>，`/api` 会代理到 8000 端口。
+
+## 测试
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest backend\tests -q
+cd frontend
+npm run build
+```
+
+测试覆盖本地分离任务、模型音轨校验、伴奏混音、ZIP/下载 API、双吉他流水线和
+MusicXML/MIDI 导出。
+
+## 数据与输出
+
+- 后端任务目录：`backend/data/jobs/`
+- 分离音轨：`backend/data/jobs/separations/<job-id>/stems/`
+- 指定伴奏：`backend/data/jobs/separations/<job-id>/accompaniments/`
+- 分离清单：`backend/data/jobs/separations/<job-id>/manifest.json`
+- 构建后的前端：`frontend/dist/`
+
+任务状态保存在当前进程内；重启后端后，旧任务不会继续出现在任务列表中。结果文件
+仍保留在磁盘中，可在确认不再需要后人工清理。
+
+## API
+
+- `GET /api/health`：运行时、设备、模型和转录能力。
+- `POST /api/separations`：上传音频并创建本地分离任务。
+- `GET /api/separations/{job_id}`：查询任务与结果。
+- `GET /api/separations/{job_id}/events`：SSE 实时进度。
+- `GET /api/separations/{job_id}/audio/source`：原曲。
+- `GET /api/separations/{job_id}/audio/{stem|accompaniment}/{key}`：音轨或伴奏。
+- `GET /api/separations/{job_id}/archive`：完整 ZIP。
+- `POST /api/transcriptions`：单吉他扒谱。
+- `POST /api/song-transcriptions`：云端双吉他扒谱。
+
+完整交互式接口文档位于 <http://127.0.0.1:8000/docs>。
+
+## 许可与致谢
+
+项目代码见仓库许可证。核心模型与工具包括
+[Demucs](https://github.com/facebookresearch/demucs)、
+[Basic Pitch](https://github.com/spotify/basic-pitch)、
+[alphaTab](https://www.alphatab.net/) 和 [FFmpeg](https://ffmpeg.org/)。

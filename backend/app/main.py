@@ -1,4 +1,4 @@
-"""FastAPI application for guitar audio transcription."""
+"""吉他扒谱、音轨分离与指定乐器伴奏的 FastAPI 应用。"""
 
 from __future__ import annotations
 
@@ -25,9 +25,23 @@ from .config import (
     ensure_runtime_directories,
 )
 from .guitar import parse_tuning
-from .jobs import JobRunner, SongJobRunner, UnknownJobError
+from .jobs import (
+    JobRunner,
+    SeparationJobRunner,
+    SongJobRunner,
+    UnknownJobError,
+)
+from .local_separation import (
+    SEPARATION_MODELS,
+    detect_device,
+    model_catalog,
+    separation_ready,
+)
 from .schemas import (
     HealthResponse,
+    SeparationCreated,
+    SeparationJob,
+    SeparationOptions,
     SongTranscriptionJob,
     TranscriptionCreated,
     TranscriptionJob,
@@ -43,6 +57,7 @@ mimetypes.add_type("image/svg+xml", ".svg")
 
 runner = JobRunner()
 song_runner = SongJobRunner()
+separation_runner = SeparationJobRunner()
 
 
 @asynccontextmanager
@@ -51,12 +66,13 @@ async def lifespan(_: FastAPI):
     yield
     runner.shutdown()
     song_runner.shutdown()
+    separation_runner.shutdown()
 
 
 app = FastAPI(
-    title="吉他扒谱 API",
+    title="Fretline 扒谱与音轨分离 API",
     version="0.1.0",
-    description="将吉他音频转换为六线谱、MIDI 和 MusicXML。",
+    description="本地音轨分离、指定乐器伴奏与吉他扒谱。",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -87,6 +103,13 @@ def _get_song_job(job_id: str) -> SongTranscriptionJob:
         raise HTTPException(status_code=404, detail="整曲任务不存在") from exc
 
 
+def _get_separation_job(job_id: str) -> SeparationJob:
+    try:
+        return separation_runner.get(job_id)
+    except UnknownJobError as exc:
+        raise HTTPException(status_code=404, detail="分离任务不存在") from exc
+
+
 @app.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(
@@ -100,6 +123,9 @@ def health() -> HealthResponse:
             else "MVSep Lead/Rhythm Guitar "
             f"({'one-stage' if MVSEP_MODEL_TYPE == '1' else 'two-stage'})"
         ),
+        local_separation_ready=separation_ready(),
+        separation_device=detect_device() if separation_ready() else None,
+        separation_models=model_catalog(),
         supported_formats=sorted(ALLOWED_AUDIO_EXTENSIONS),
         max_upload_mb=MAX_UPLOAD_BYTES // (1024 * 1024),
     )
@@ -407,6 +433,199 @@ async def song_transcription_events(job_id: str) -> StreamingResponse:
                 yield f"event: progress\ndata: {payload}\n\n"
                 last_revision = job.revision
             if job.status in {"succeeded", "partial", "failed"}:
+                yield "event: done\ndata: {}\n\n"
+                return
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post(
+    "/api/separations",
+    response_model=SeparationCreated,
+    status_code=202,
+)
+async def create_separation(
+    audio: UploadFile = File(...),
+    model: str = Form("htdemucs"),
+    remove_stems: str = Form(""),
+    quality: str = Form("balanced"),
+) -> SeparationCreated:
+    if not separation_ready():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "本地分离引擎未就绪。请安装后端 Demucs 依赖，"
+                "并确保 ffmpeg/ffprobe 可用。"
+            ),
+        )
+    filename = _safe_filename(audio.filename)
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的音频格式: {extension or '未知'}",
+        )
+
+    selected_stems = [
+        item.strip()
+        for item in remove_stems.split(",")
+        if item.strip()
+    ]
+    try:
+        options = SeparationOptions(
+            model=model,
+            remove_stems=list(dict.fromkeys(selected_stems)),
+            quality=quality,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    model_config = SEPARATION_MODELS.get(options.model)
+    if model_config is None:
+        raise HTTPException(status_code=422, detail=f"未知分离模型: {options.model}")
+    invalid_stems = [
+        stem for stem in options.remove_stems
+        if stem not in model_config.stems
+    ]
+    if invalid_stems:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"模型 {model_config.label} 不支持这些音轨: "
+                + ", ".join(invalid_stems)
+            ),
+        )
+
+    job = separation_runner.new_job(filename=filename, options=options)
+    job_dir = separation_runner.job_dir(job.id)
+    input_path = job_dir / f"input{extension}"
+    size = 0
+    try:
+        with input_path.open("wb") as destination:
+            while chunk := await audio.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB 限制",
+                    )
+                destination.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="上传文件为空")
+    except HTTPException as exc:
+        input_path.unlink(missing_ok=True)
+        separation_runner.fail_upload(job.id, str(exc.detail))
+        raise
+    except Exception as exc:
+        input_path.unlink(missing_ok=True)
+        separation_runner.fail_upload(job.id, f"保存上传文件失败: {exc}")
+        raise HTTPException(status_code=500, detail="保存上传文件失败") from exc
+    finally:
+        await audio.close()
+
+    separation_runner.start(job.id, input_path)
+    return SeparationCreated(job_id=job.id, status="queued")
+
+
+@app.get("/api/separations/{job_id}", response_model=SeparationJob)
+def get_separation(job_id: str) -> SeparationJob:
+    return _get_separation_job(job_id)
+
+
+def _separation_input_path(job_id: str) -> Path:
+    job = _get_separation_job(job_id)
+    candidates = [
+        path
+        for path in separation_runner.job_dir(job.id).glob("input.*")
+        if path.suffix.lower() in ALLOWED_AUDIO_EXTENSIONS
+    ]
+    if not candidates:
+        raise HTTPException(status_code=404, detail="原始音频不存在")
+    return candidates[0]
+
+
+@app.get("/api/separations/{job_id}/audio/source")
+def get_separation_source_audio(job_id: str) -> FileResponse:
+    job = _get_separation_job(job_id)
+    path = _separation_input_path(job_id)
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=job.filename)
+
+
+@app.get("/api/separations/{job_id}/audio/{kind}/{stem_key}")
+def get_separation_audio(
+    job_id: str,
+    kind: str,
+    stem_key: str,
+) -> FileResponse:
+    job = _get_separation_job(job_id)
+    if job.result is None or kind not in {"stem", "accompaniment"}:
+        raise HTTPException(status_code=404, detail="分离音轨不存在")
+
+    if kind == "stem":
+        item = next(
+            (stem for stem in job.result.stems if stem.key == stem_key),
+            None,
+        )
+        folder = "stems"
+    else:
+        item = next(
+            (
+                accompaniment
+                for accompaniment in job.result.accompaniments
+                if accompaniment.key == stem_key
+            ),
+            None,
+        )
+        folder = "accompaniments"
+    if item is None:
+        raise HTTPException(status_code=404, detail="分离音轨不存在")
+
+    path = separation_runner.job_dir(job.id) / folder / item.filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="分离音轨文件不存在")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@app.get("/api/separations/{job_id}/archive")
+def download_separation_archive(job_id: str) -> FileResponse:
+    job = _get_separation_job(job_id)
+    if (
+        job.result is None
+        or not job.result.archive_filename
+    ):
+        raise HTTPException(status_code=404, detail="分离项目压缩包尚未生成")
+    path = separation_runner.job_dir(job.id) / job.result.archive_filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="分离项目压缩包不存在")
+    return FileResponse(path, filename=path.name, media_type="application/zip")
+
+
+@app.get("/api/separations/{job_id}/events")
+async def separation_events(job_id: str) -> StreamingResponse:
+    _get_separation_job(job_id)
+
+    async def event_stream():
+        last_revision = -1
+        while True:
+            try:
+                job = separation_runner.get(job_id)
+            except UnknownJobError:
+                yield "event: error\ndata: {\"detail\":\"分离任务不存在\"}\n\n"
+                return
+            if job.revision != last_revision:
+                payload = json.dumps(job.model_dump(mode="json"), ensure_ascii=False)
+                yield f"event: progress\ndata: {payload}\n\n"
+                last_revision = job.revision
+            if job.status in {"succeeded", "failed"}:
                 yield "event: done\ndata: {}\n\n"
                 return
             await asyncio.sleep(0.4)
