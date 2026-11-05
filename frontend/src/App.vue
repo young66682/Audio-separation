@@ -1242,6 +1242,9 @@ function selectGuitar(key: GuitarKey) {
                   min="0.04"
                   max="0.3"
                   step="0.01"
+                  :style="{
+                    '--range-progress': `${((settings.minDuration - 0.04) / 0.26) * 100}%`,
+                  }"
                   :disabled="isWorking"
                 />
                 <b>{{ settings.minDuration.toFixed(2) }}s</b>
@@ -1257,6 +1260,9 @@ function selectGuitar(key: GuitarKey) {
                   min="0.1"
                   max="0.7"
                   step="0.02"
+                  :style="{
+                    '--range-progress': `${((settings.minVelocity - 0.1) / 0.6) * 100}%`,
+                  }"
                   :disabled="isWorking"
                 />
                 <b>{{ Math.round(settings.minVelocity * 100) }}%</b>
