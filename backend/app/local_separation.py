@@ -26,6 +26,18 @@ ProgressCallback = Callable[[int, str, str], None]
 DEMUCS_PROGRESS_RE = re.compile(r"(\d{1,3})%")
 
 
+def _console_safe_text(value: str, encoding: str | None = None) -> str:
+    """把日志转换为当前控制台可编码的文本，避免进度条中断读取线程。"""
+    target_encoding = encoding or getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        return value.encode(
+            target_encoding,
+            errors="replace",
+        ).decode(target_encoding, errors="replace")
+    except LookupError:
+        return value.encode("ascii", errors="replace").decode("ascii")
+
+
 @dataclass(frozen=True)
 class SeparationModel:
     key: str
@@ -366,7 +378,7 @@ class LocalSeparator:
                     if not line:
                         continue
                     tail.append(line)
-                    print(f"[demucs] {line}", flush=True)
+                    print(f"[demucs] {_console_safe_text(line)}", flush=True)
                     match = DEMUCS_PROGRESS_RE.search(line)
                     if not match:
                         continue

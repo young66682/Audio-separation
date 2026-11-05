@@ -185,7 +185,7 @@ async def market_search(options: MarketSearchRequest) -> MarketSearchResponse:
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,
-            detail="Apple Music 查询服务暂时不可用，请稍后重试。",
+            detail="网易云音乐查询服务暂时不可用，请稍后重试。",
         ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

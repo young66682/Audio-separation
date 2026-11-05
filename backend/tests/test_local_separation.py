@@ -12,6 +12,7 @@ import pytest
 from app.local_separation import (
     SEPARATION_MODELS,
     LocalSeparator,
+    _console_safe_text,
     model_catalog,
 )
 from app.demucs_runner import _install_soundfile_save
@@ -66,6 +67,16 @@ def test_model_catalog_exposes_expected_stems() -> None:
         "bass",
         "other",
     ]
+
+
+def test_demucs_progress_log_is_safe_for_gbk_console() -> None:
+    line = "  5%|█████     | 0.5/10 [00:01<00:19]"
+
+    converted = _console_safe_text(line, "gbk")
+
+    assert "5%" in converted
+    assert "\ufffd" not in converted
+    converted.encode("gbk")
 
 
 def test_separation_builds_stems_manifest_accompaniment_and_zip(

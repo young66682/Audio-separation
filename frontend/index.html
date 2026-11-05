@@ -3,10 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      try {
+        const savedTheme = localStorage.getItem("fretline-theme");
+        document.documentElement.dataset.theme =
+          savedTheme === "dark" ? "dark" : "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
     <meta
       name="description"
       content="本地器乐分离、指定乐器伴奏、去轨与吉他扒谱工作台"
     />
+    <meta name="theme-color" content="#edf8ff" />
+    <link rel="icon" data-theme-icon type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/brand-icon.png" />
     <title>Fretline · 扒谱与器乐分离</title>
   </head>
   <body>

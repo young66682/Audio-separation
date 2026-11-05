@@ -47,6 +47,7 @@ import type {
 
 type WorkMode = "separate" | "song" | "guitar";
 type GuitarKey = "lead" | "rhythm";
+type Theme = "light" | "dark";
 
 const GuitarScore = defineAsyncComponent(
   () => import("./components/GuitarScore.vue"),
@@ -74,9 +75,45 @@ const songJob = ref<SongTranscriptionJob | null>(null);
 const separationJob = ref<SeparationJob | null>(null);
 const selectedGuitar = ref<GuitarKey>("lead");
 const currentTime = ref(0);
+const theme = ref<Theme>(readTheme());
 let stopEvents: (() => void) | null = null;
 let marketSearchVersion = 0;
 let scoreSearchVersion = 0;
+
+function readTheme(): Theme {
+  try {
+    return localStorage.getItem("fretline-theme") === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function applyTheme(value: Theme) {
+  document.documentElement.dataset.theme = value;
+  document.documentElement.style.colorScheme =
+    value === "dark" ? "dark" : "light";
+  try {
+    localStorage.setItem("fretline-theme", value);
+  } catch {
+    // 浏览器禁用本地存储时仍可正常切换当前页面主题。
+  }
+  const icon = document.querySelector<HTMLLinkElement>("[data-theme-icon]");
+  if (icon) {
+    icon.href = value === "dark" ? "/favicon-dark.png" : "/favicon.png";
+  }
+  const themeColor = document.querySelector<HTMLMetaElement>(
+    'meta[name="theme-color"]',
+  );
+  if (themeColor) {
+    themeColor.content = value === "dark" ? "#111813" : "#edf8ff";
+  }
+}
+
+function toggleTheme() {
+  theme.value = theme.value === "dark" ? "light" : "dark";
+}
+
+watch(theme, applyTheme, { immediate: true });
 
 const settings = reactive({
   autoBpm: true,
@@ -538,35 +575,57 @@ function selectGuitar(key: GuitarKey) {
   <div class="app-shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="Fretline home">
-        <span class="brand-mark">
-          <i v-for="line in 6" :key="line" />
-        </span>
+        <img
+          class="brand-mark"
+          :src="
+            theme === 'dark'
+              ? '/brand-icon-dark.png'
+              : '/brand-icon.png'
+          "
+          alt=""
+          width="56"
+          height="56"
+        />
         <span>
           <strong>Fretline</strong>
           <small>扒谱与器乐分离工作台</small>
         </span>
       </a>
-      <div
-        class="system-state"
-        :class="{
-          offline:
-            workMode === 'separate'
-              ? !localSeparationReady
-              : !health?.transcription_ready,
-        }"
-      >
-        <span class="state-dot" />
-        <template v-if="workMode === 'separate'">
-          {{ localSeparationReady ? "本地分离引擎就绪" : "本地分离引擎未就绪" }}
-          <span v-if="health?.separation_device" class="state-separator">/</span>
-          {{ health?.separation_device?.toUpperCase() }}
-        </template>
-        <template v-else-if="health?.transcription_ready">
-          扒谱引擎就绪
-          <span class="state-separator">/</span>
-          {{ cloudReady ? "双吉他云端可用" : "本地模式" }}
-        </template>
-        <template v-else>扒谱引擎未就绪</template>
+      <div class="header-actions">
+        <button
+          type="button"
+          class="theme-toggle"
+          :aria-label="theme === 'dark' ? '切换到浅色模式' : '切换到深夜模式'"
+          :title="theme === 'dark' ? '切换到浅色模式' : '切换到深夜模式'"
+          @click="toggleTheme"
+        >
+          <span class="theme-toggle-icon" aria-hidden="true">
+            {{ theme === "dark" ? "☀" : "☾" }}
+          </span>
+          <span>{{ theme === "dark" ? "浅色模式" : "深夜模式" }}</span>
+        </button>
+        <div
+          class="system-state"
+          :class="{
+            offline:
+              workMode === 'separate'
+                ? !localSeparationReady
+                : !health?.transcription_ready,
+          }"
+        >
+          <span class="state-dot" />
+          <template v-if="workMode === 'separate'">
+            {{ localSeparationReady ? "本地分离引擎就绪" : "本地分离引擎未就绪" }}
+            <span v-if="health?.separation_device" class="state-separator">/</span>
+            {{ health?.separation_device?.toUpperCase() }}
+          </template>
+          <template v-else-if="health?.transcription_ready">
+            扒谱引擎就绪
+            <span class="state-separator">/</span>
+            {{ cloudReady ? "双吉他云端可用" : "本地模式" }}
+          </template>
+          <template v-else>扒谱引擎未就绪</template>
+        </div>
       </div>
     </header>
 
@@ -659,7 +718,7 @@ function selectGuitar(key: GuitarKey) {
                   <h2>{{ lookupTab === "market" ? "市面伴奏速查" : "现有曲谱速查" }}</h2>
                 </div>
                 <span class="market-source">
-                  {{ lookupTab === "market" ? "APPLE MUSIC" : "弹琴吧 · 国内" }}
+                  {{ lookupTab === "market" ? "网易云音乐 · 国内" : "弹琴吧 · 国内" }}
                 </span>
               </div>
               <div class="lookup-tabs" role="tablist" aria-label="联网速查类型">
@@ -712,7 +771,7 @@ function selectGuitar(key: GuitarKey) {
               <p class="market-hint">
                 {{
                   lookupTab === "market"
-                    ? "搜索 Backing Track、Karaoke、Instrumental 和指定乐器去轨版本。"
+                    ? "从网易云音乐搜索伴奏、纯音乐、伴唱和指定乐器去轨版本。"
                     : "优先搜索弹琴吧等中文曲谱，国际谱库作为备用入口。"
                 }}
               </p>

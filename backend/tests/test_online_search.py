@@ -7,38 +7,39 @@ from fastapi.testclient import TestClient
 from app import main, online_search
 
 
-def _apple_result(
-    track_id: int,
+def _netease_result(
+    song_id: int,
     title: str,
     *,
-    artist: str = "Backing Tracks For Guitarists",
-    album: str = "Backing Tracks, Vol. 1",
+    artist: str = "Guitar Backing Tracks",
+    album: str = "国内伴奏合集",
+    playable: bool = True,
 ) -> dict[str, object]:
     return {
-        "trackId": track_id,
-        "trackName": title,
-        "artistName": artist,
-        "collectionName": album,
-        "trackViewUrl": f"https://music.apple.com/us/album/test/{track_id}",
-        "previewUrl": (
-            "https://audio-ssl.itunes.apple.com/itunes-assets/preview.m4a"
-        ),
-        "artworkUrl100": (
-            "https://is1-ssl.mzstatic.com/image/thumb/artwork.jpg"
-        ),
+        "id": song_id,
+        "name": title,
+        "ar": [{"name": artist}],
+        "al": {
+            "name": album,
+            "picUrl": (
+                "http://p1.music.126.net/"
+                f"cover-{song_id}.jpg"
+            ),
+        },
+        "privilege": {"pl": 320000 if playable else 0},
     }
 
 
 def test_market_search_filters_and_ranks_backing_tracks(monkeypatch) -> None:
     async def fake_fetch(query: str, limit: int):
-        if "minus guitar" in query:
+        if "无吉他" in query:
             return [
-                _apple_result(
+                _netease_result(
                     2,
-                    "Hotel California (Minus All Guitars)",
+                    "Hotel California (无人声伴奏)",
                     album="Guitar Backing Tracks",
                 ),
-                _apple_result(
+                _netease_result(
                     1,
                     "Hotel California",
                     artist="Eagles",
@@ -46,11 +47,11 @@ def test_market_search_filters_and_ranks_backing_tracks(monkeypatch) -> None:
                 ),
             ]
         return [
-            _apple_result(3, "Hotel California (Backing Track)"),
-            _apple_result(2, "Hotel California (Minus All Guitars)"),
+            _netease_result(3, "Hotel California (伴奏)"),
+            _netease_result(2, "Hotel California (无人声伴奏)"),
         ]
 
-    monkeypatch.setattr(online_search, "_fetch_itunes", fake_fetch)
+    monkeypatch.setattr(online_search, "_fetch_netease", fake_fetch)
     result = asyncio.run(
         online_search.search_market(
             "Hotel California",
@@ -60,28 +61,56 @@ def test_market_search_filters_and_ranks_backing_tracks(monkeypatch) -> None:
     )
 
     suggestions = result["suggestions"]
+    assert result["provider"] == "网易云音乐 · 国内搜索"
     assert suggestions
-    assert all(item["id"] == "2" or "backing" in item["title"].lower()
-               for item in suggestions)
     assert suggestions[0]["id"] == "2"
-    assert suggestions[0]["kind"] == "Minus One"
+    assert suggestions[0]["kind"] == "无人声"
+    assert all(item["id"] != "1" for item in suggestions)
     assert len({item["id"] for item in suggestions}) == len(suggestions)
+
+
+def test_market_search_only_exposes_playable_preview(monkeypatch) -> None:
+    async def fake_fetch(_query: str, _limit: int):
+        return [
+            _netease_result(
+                10,
+                "Test Song (伴奏)",
+                playable=True,
+            ),
+            _netease_result(
+                11,
+                "Test Song (伴奏 VIP)",
+                playable=False,
+            ),
+        ]
+
+    monkeypatch.setattr(online_search, "_fetch_netease", fake_fetch)
+    result = asyncio.run(
+        online_search.search_market("Test Song", "", [])
+    )
+    by_id = {item["id"]: item for item in result["suggestions"]}
+
+    assert by_id["10"]["preview_url"] is not None
+    assert by_id["11"]["preview_url"] is None
+    assert by_id["10"]["url"].startswith("https://music.163.com/")
 
 
 def test_market_search_api(monkeypatch) -> None:
     async def fake_search(title, artist, remove_stems, limit):
         return {
-            "provider": "Apple Music / iTunes Search",
-            "queries": [f"{title} backing track"],
+            "provider": "网易云音乐 · 国内搜索",
+            "queries": [f"{title} 伴奏"],
             "suggestions": [
                 {
                     "id": "42",
-                    "title": "Test Song (Backing Track)",
+                    "title": "Test Song (伴奏)",
                     "artist": "Test",
-                    "album": "Backing Tracks",
-                    "kind": "Backing Track",
-                    "url": "https://music.apple.com/us/album/test/42",
-                    "preview_url": None,
+                    "album": "国内伴奏合集",
+                    "kind": "伴奏",
+                    "url": "https://music.163.com/#/song?id=42",
+                    "preview_url": (
+                        "https://music.163.com/song/media/outer/url?id=42.mp3"
+                    ),
                     "artwork_url": None,
                     "relevance": 12,
                 }
@@ -101,4 +130,5 @@ def test_market_search_api(monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["suggestions"][0]["kind"] == "Backing Track"
+    assert payload["provider"] == "网易云音乐 · 国内搜索"
+    assert payload["suggestions"][0]["kind"] == "伴奏"
