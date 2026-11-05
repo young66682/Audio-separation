@@ -16,6 +16,7 @@ import {
   createSongTranscription,
   createTranscription,
   fetchHealth,
+  fetchRecentJobs,
   fetchSeparationJob,
   fetchSongJob,
   fetchTranscriptionJob,
@@ -48,6 +49,13 @@ import type {
 type WorkMode = "separate" | "song" | "guitar";
 type GuitarKey = "lead" | "rhythm";
 type Theme = "light" | "dark";
+type StoredJob = {
+  jobId: string;
+  mode: WorkMode;
+};
+
+const LAST_JOB_KEY = "fretline-last-job";
+const RESET_MARKER_KEY = "fretline-reset";
 
 const GuitarScore = defineAsyncComponent(
   () => import("./components/GuitarScore.vue"),
@@ -114,6 +122,71 @@ function toggleTheme() {
 }
 
 watch(theme, applyTheme, { immediate: true });
+
+function isWorkMode(value: string | null): value is WorkMode {
+  return value === "separate" || value === "song" || value === "guitar";
+}
+
+function readLastJob(): StoredJob | null {
+  try {
+    const raw = localStorage.getItem(LAST_JOB_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as Partial<StoredJob>;
+    if (
+      typeof stored.jobId !== "string"
+      || !stored.jobId
+      || !isWorkMode(stored.mode ?? null)
+    ) {
+      return null;
+    }
+    return { jobId: stored.jobId, mode: stored.mode as WorkMode };
+  } catch {
+    return null;
+  }
+}
+
+function writeJobUrl(jobId: string | null, mode?: WorkMode) {
+  const url = new URL(window.location.href);
+  if (jobId && mode) {
+    url.searchParams.set("job", jobId);
+    url.searchParams.set("mode", mode);
+  } else {
+    url.searchParams.delete("job");
+    url.searchParams.delete("mode");
+  }
+  window.history.replaceState({}, "", url);
+}
+
+function rememberJob(jobId: string, mode: WorkMode) {
+  try {
+    localStorage.setItem(
+      LAST_JOB_KEY,
+      JSON.stringify({ jobId, mode } satisfies StoredJob),
+    );
+    sessionStorage.removeItem(RESET_MARKER_KEY);
+  } catch {
+    // 本地存储不可用时仍通过地址栏恢复任务。
+  }
+  writeJobUrl(jobId, mode);
+}
+
+function clearRememberedJob() {
+  try {
+    localStorage.removeItem(LAST_JOB_KEY);
+    sessionStorage.setItem(RESET_MARKER_KEY, "1");
+  } catch {
+    // 忽略浏览器禁用存储的情况。
+  }
+  writeJobUrl(null);
+}
+
+function resetWasRequested(): boolean {
+  try {
+    return sessionStorage.getItem(RESET_MARKER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 const settings = reactive({
   autoBpm: true,
@@ -247,7 +320,7 @@ function artifactEntries(
 
 onMounted(async () => {
   await refreshHealth();
-  await restoreJobFromUrl();
+  await restoreCurrentJob();
 });
 
 onBeforeUnmount(() => {
@@ -294,31 +367,99 @@ async function refreshHealth() {
   }
 }
 
-async function restoreJobFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const jobId = params.get("job");
-  const mode = params.get("mode");
-  if (!jobId) return;
-  try {
-    if (mode === "song") {
-      workMode.value = "song";
-      const job = await fetchSongJob(jobId);
-      songJob.value = job;
-      if (job.status === "queued" || job.status === "running") {
-        watchSongJob(jobId);
-      } else if (job.status === "failed") {
-        errorMessage.value = job.error ?? "整曲任务失败";
-      }
-    } else if (mode === "separate") {
-      workMode.value = "separate";
-      separationJob.value = await fetchSeparationJob(jobId);
-    } else {
-      workMode.value = "guitar";
-      singleJob.value = await fetchTranscriptionJob(jobId);
+async function restoreJob(jobId: string, mode: WorkMode) {
+  stopEvents?.();
+  stopEvents = null;
+  workMode.value = mode;
+  singleJob.value = null;
+  songJob.value = null;
+  separationJob.value = null;
+  currentTime.value = 0;
+  errorMessage.value = "";
+
+  if (mode === "song") {
+    const job = await fetchSongJob(jobId);
+    songJob.value = job;
+    if (job.status === "queued" || job.status === "running") {
+      watchSongJob(jobId);
+    } else if (job.status === "failed") {
+      errorMessage.value = job.error ?? "整曲任务失败";
     }
-  } catch (error) {
+  } else if (mode === "separate") {
+    const job = await fetchSeparationJob(jobId);
+    separationJob.value = job;
+    if (job.status === "queued" || job.status === "running") {
+      watchSeparationJob(jobId);
+    } else if (job.status === "failed") {
+      errorMessage.value = job.error ?? "音轨分离失败";
+    }
+  } else {
+    const job = await fetchTranscriptionJob(jobId);
+    singleJob.value = job;
+    if (job.status === "queued" || job.status === "running") {
+      watchSingleJob(jobId);
+    } else if (job.status === "failed") {
+      errorMessage.value = job.error ?? "扒谱任务失败";
+    }
+  }
+  rememberJob(jobId, mode);
+}
+
+async function restoreCurrentJob() {
+  const params = new URLSearchParams(window.location.search);
+  const urlJobId = params.get("job");
+  const urlMode = params.get("mode");
+  if (urlJobId && isWorkMode(urlMode)) {
+    try {
+      sessionStorage.removeItem(RESET_MARKER_KEY);
+    } catch {
+      // 忽略浏览器禁用存储的情况。
+    }
+  }
+
+  const stored = readLastJob();
+  const candidates: StoredJob[] = [];
+  if (urlJobId && isWorkMode(urlMode)) {
+    candidates.push({ jobId: urlJobId, mode: urlMode });
+  }
+  if (
+    stored
+    && !candidates.some((candidate) => candidate.jobId === stored.jobId)
+  ) {
+    candidates.push(stored);
+  }
+
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      await restoreJob(candidate.jobId, candidate.mode);
+      return;
+    } catch (error) {
+      lastError = error;
+      try {
+        localStorage.removeItem(LAST_JOB_KEY);
+      } catch {
+        // 忽略浏览器禁用存储的情况。
+      }
+    }
+  }
+
+  if (!resetWasRequested()) {
+    try {
+      const recent = await fetchRecentJobs(1);
+      const latest = recent.jobs[0];
+      if (latest) {
+        await restoreJob(latest.id, latest.mode);
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
     errorMessage.value =
-      error instanceof Error ? error.message : "无法恢复任务结果";
+      lastError instanceof Error ? lastError.message : "无法恢复任务结果";
   }
 }
 
@@ -365,6 +506,48 @@ function watchSongJob(jobId: string) {
       submitting.value = false;
       if (job.status === "failed") {
         errorMessage.value = job.error ?? "整曲双吉他处理失败";
+      }
+    },
+    () => {
+      stopEvents?.();
+      stopEvents = null;
+    },
+    (message) => {
+      errorMessage.value = message;
+      submitting.value = false;
+    },
+  );
+}
+
+function watchSeparationJob(jobId: string) {
+  stopEvents = subscribeToSeparationJob(
+    jobId,
+    (job) => {
+      separationJob.value = job;
+      submitting.value = false;
+      if (job.status === "failed") {
+        errorMessage.value = job.error ?? "音轨分离失败";
+      }
+    },
+    () => {
+      stopEvents?.();
+      stopEvents = null;
+    },
+    (message) => {
+      errorMessage.value = message;
+      submitting.value = false;
+    },
+  );
+}
+
+function watchSingleJob(jobId: string) {
+  stopEvents = subscribeToJob(
+    jobId,
+    (job) => {
+      singleJob.value = job;
+      submitting.value = false;
+      if (job.status === "failed") {
+        errorMessage.value = job.error ?? "扒谱失败，请调整参数后重试。";
       }
     },
     () => {
@@ -486,47 +669,16 @@ async function startTranscription() {
         remove_stems: separationSettings.removeStems,
         quality: separationSettings.quality,
       });
-      stopEvents = subscribeToSeparationJob(
-        created.job_id,
-        (job) => {
-          separationJob.value = job;
-          submitting.value = false;
-          if (job.status === "failed") {
-            errorMessage.value = job.error ?? "音轨分离失败";
-          }
-        },
-        () => {
-          stopEvents?.();
-          stopEvents = null;
-        },
-        (message) => {
-          errorMessage.value = message;
-          submitting.value = false;
-        },
-      );
+      rememberJob(created.job_id, "separate");
+      watchSeparationJob(created.job_id);
     } else if (workMode.value === "song") {
       const created = await createSongTranscription(selectedFile.value, options);
+      rememberJob(created.job_id, "song");
       watchSongJob(created.job_id);
     } else {
       const created = await createTranscription(selectedFile.value, options);
-      stopEvents = subscribeToJob(
-        created.job_id,
-        (job) => {
-          singleJob.value = job;
-          submitting.value = false;
-          if (job.status === "failed") {
-            errorMessage.value = job.error ?? "扒谱失败，请调整参数后重试。";
-          }
-        },
-        () => {
-          stopEvents?.();
-          stopEvents = null;
-        },
-        (message) => {
-          errorMessage.value = message;
-          submitting.value = false;
-        },
-      );
+      rememberJob(created.job_id, "guitar");
+      watchSingleJob(created.job_id);
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "提交任务失败";
@@ -542,6 +694,7 @@ async function retryCurrentSongJob() {
   stopEvents = null;
   try {
     const created = await retrySongTranscription(songJob.value.id);
+    rememberJob(created.job_id, "song");
     watchSongJob(created.job_id);
   } catch (error) {
     errorMessage.value =
@@ -558,6 +711,7 @@ function reset() {
   separationJob.value = null;
   currentTime.value = 0;
   errorMessage.value = "";
+  clearRememberedJob();
 }
 
 function seek(seconds: number) {

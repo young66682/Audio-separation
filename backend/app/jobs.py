@@ -31,6 +31,21 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _recent_job_snapshots(
+    jobs: dict[str, Any],
+    lock: threading.RLock,
+    limit: int,
+) -> list[Any]:
+    """返回最近更新的任务快照，避免调用方读取内部状态。"""
+    with lock:
+        ordered = sorted(
+            jobs.values(),
+            key=lambda job: job.updated_at,
+            reverse=True,
+        )
+        return [job.model_copy(deep=True) for job in ordered[:limit]]
+
+
 def _persist_job_snapshot(directory: Path, job: Any) -> None:
     """原子写入任务快照，避免进程中断留下半个 JSON。"""
     target = directory / "job.json"
@@ -226,6 +241,9 @@ class JobRunner:
                 raise UnknownJobError(job_id)
             return job.model_copy(deep=True)
 
+    def recent(self, limit: int = 5) -> list[TranscriptionJob]:
+        return _recent_job_snapshots(self._jobs, self._lock, limit)
+
     @staticmethod
     def artifact_filename(artifact_key: str) -> str | None:
         return GuitarTranscriber.artifacts.get(artifact_key)
@@ -417,6 +435,9 @@ class SongJobRunner:
                 raise UnknownJobError(job_id)
             return job.model_copy(deep=True)
 
+    def recent(self, limit: int = 5) -> list[SongTranscriptionJob]:
+        return _recent_job_snapshots(self._jobs, self._lock, limit)
+
     def _ensure_executor(self) -> ThreadPoolExecutor:
         with self._lock:
             if self._executor is None:
@@ -573,6 +594,9 @@ class SeparationJobRunner:
             if job is None:
                 raise UnknownJobError(job_id)
             return job.model_copy(deep=True)
+
+    def recent(self, limit: int = 5) -> list[SeparationJob]:
+        return _recent_job_snapshots(self._jobs, self._lock, limit)
 
     def _ensure_executor(self) -> ThreadPoolExecutor:
         with self._lock:

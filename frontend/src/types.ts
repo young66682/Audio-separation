@@ -142,6 +142,21 @@ export interface SeparationJob {
   revision: number;
 }
 
+export interface RecentJobSummary {
+  id: string;
+  mode: "guitar" | "song" | "separate";
+  filename: string;
+  status: string;
+  progress: number;
+  message: string;
+  updated_at: string;
+  result_title: string | null;
+}
+
+export interface RecentJobsResponse {
+  jobs: RecentJobSummary[];
+}
+
 export interface MarketSuggestion {
   id: string;
   title: string;

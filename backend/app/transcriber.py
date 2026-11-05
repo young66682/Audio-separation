@@ -231,6 +231,7 @@ class GuitarTranscriber:
                 musicxml_path,
                 title,
                 options.tuning,
+                options.capo,
             )
         except Exception as exc:
             all_warnings.append(f"MusicXML 导出失败：{exc}")

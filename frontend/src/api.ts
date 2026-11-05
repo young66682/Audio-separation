@@ -1,6 +1,7 @@
 import type {
   Health,
   MarketSearchResponse,
+  RecentJobsResponse,
   ScoreSearchResponse,
   SeparationJob,
   SeparationOptions,
@@ -21,6 +22,14 @@ async function readError(response: Response): Promise<string> {
 
 export async function fetchHealth(): Promise<Health> {
   const response = await fetch(`${API_BASE}/api/health`);
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response.json();
+}
+
+export async function fetchRecentJobs(limit = 5): Promise<RecentJobsResponse> {
+  const response = await fetch(`${API_BASE}/api/jobs/recent?limit=${limit}`);
   if (!response.ok) {
     throw new Error(await readError(response));
   }

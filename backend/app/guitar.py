@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import re
 import xml.etree.ElementTree as ET
-from collections import defaultdict, deque
 from copy import deepcopy
 from itertools import product
 from pathlib import Path
@@ -354,6 +353,7 @@ def write_musicxml(
     output_path: Path,
     title: str,
     tuning_text: str = DEFAULT_TUNING,
+    capo: int = 0,
 ) -> None:
     """Export a guitar part with string and fret indications."""
     from music21 import articulations, chord, clef, instrument, meter, stream, tempo
@@ -393,6 +393,7 @@ def write_musicxml(
         output_path,
         musicxml_events,
         tuning_text,
+        capo,
     )
 
 
@@ -454,6 +455,7 @@ def _add_musicxml_technical_indications(
     output_path: Path,
     events: Sequence[dict[str, Any]],
     tuning_text: str,
+    capo: int,
 ) -> None:
     """Add string/fret technical data that music21 does not serialize."""
     tree = ET.parse(output_path)
@@ -463,7 +465,8 @@ def _add_musicxml_technical_indications(
     if first_attributes is not None and first_attributes.find("staff-details") is None:
         staff_details = ET.SubElement(first_attributes, "staff-details")
         ET.SubElement(staff_details, "staff-lines").text = "6"
-        for line, pitch in enumerate(reversed(parse_tuning(tuning_text)), start=1):
+        # MusicXML 的 staff line 从最下方一根弦开始计数。
+        for line, pitch in enumerate(parse_tuning(tuning_text), start=1):
             pitch_name = midi_to_name(pitch)
             match = re.fullmatch(r"([A-G])(#?)(-?\d+)", pitch_name)
             if match is None:
@@ -474,24 +477,49 @@ def _add_musicxml_technical_indications(
             if accidental:
                 ET.SubElement(tuning, "tuning-alter").text = "1"
             ET.SubElement(tuning, "tuning-octave").text = octave
+        if capo > 0:
+            # 品位存储在“变调夹之后”的坐标系中，必须同步写入 capo。
+            ET.SubElement(staff_details, "capo").text = str(capo)
 
-    by_pitch: defaultdict[int, deque[dict[str, Any]]] = defaultdict(deque)
-    for event in sorted(events, key=lambda item: (float(item["start_beat"]), int(item["pitch"]))):
-        by_pitch[int(event["pitch"])].append(event)
-
-    for note_element in root.findall(".//part/measure/note"):
-        midi_pitch = _musicxml_pitch_midi(note_element)
-        if midi_pitch is None or not by_pitch[midi_pitch]:
-            continue
-        event = by_pitch[midi_pitch].popleft()
-        notations = note_element.find("notations")
-        if notations is None:
-            notations = ET.SubElement(note_element, "notations")
-        technical = notations.find("technical")
-        if technical is None:
-            technical = ET.SubElement(notations, "technical")
-        ET.SubElement(technical, "string").text = str(int(event["string"]))
-        ET.SubElement(technical, "fret").text = str(int(event["fret"]))
+    by_position = {
+        (round(float(event["start_beat"]), 4), int(event["pitch"])): event
+        for event in events
+    }
+    divisions = int(root.findtext(".//part/measure/attributes/divisions", "1"))
+    for measure_index, measure in enumerate(root.findall(".//part/measure")):
+        cursor = 0
+        chord_onset: int | None = None
+        for note_element in measure.findall("note"):
+            midi_pitch = _musicxml_pitch_midi(note_element)
+            is_chord = note_element.find("chord") is not None
+            if not is_chord:
+                chord_onset = cursor
+            onset = chord_onset if chord_onset is not None else cursor
+            duration = int(note_element.findtext("duration", "0"))
+            if not is_chord:
+                cursor += duration
+            if midi_pitch is None:
+                continue
+            start_beat = round(
+                measure_index * MUSICXML_BEATS_PER_MEASURE
+                + onset / divisions,
+                4,
+            )
+            event = by_position.get((start_beat, midi_pitch))
+            if event is None:
+                continue
+            notations = note_element.find("notations")
+            if notations is None:
+                notations = ET.SubElement(note_element, "notations")
+            technical = notations.find("technical")
+            if technical is None:
+                technical = ET.SubElement(notations, "technical")
+            ET.SubElement(technical, "string").text = str(
+                int(event["string"])
+            )
+            ET.SubElement(technical, "fret").text = str(
+                int(event["fret"])
+            )
 
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
 

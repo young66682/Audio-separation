@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,6 +45,8 @@ from .schemas import (
     HealthResponse,
     MarketSearchRequest,
     MarketSearchResponse,
+    RecentJobSummary,
+    RecentJobsResponse,
     ScoreSearchRequest,
     ScoreSearchResponse,
     SeparationCreated,
@@ -170,6 +172,41 @@ def health() -> HealthResponse:
         supported_formats=sorted(ALLOWED_AUDIO_EXTENSIONS),
         max_upload_mb=MAX_UPLOAD_BYTES // (1024 * 1024),
     )
+
+
+@app.get("/api/jobs/recent", response_model=RecentJobsResponse)
+def recent_jobs(
+    limit: int = Query(default=5, ge=1, le=20),
+) -> RecentJobsResponse:
+    """返回最近的单吉他、整曲和分离任务，用于刷新后恢复工作现场。"""
+    summaries: list[RecentJobSummary] = []
+    for mode, job_runner in (
+        ("guitar", runner),
+        ("song", song_runner),
+        ("separate", separation_runner),
+    ):
+        for job in job_runner.recent(limit):
+            result = job.result
+            if isinstance(result, dict):
+                result_title = result.get("title")
+            elif result is not None:
+                result_title = getattr(result, "title", None)
+            else:
+                result_title = None
+            summaries.append(
+                RecentJobSummary(
+                    id=job.id,
+                    mode=mode,
+                    filename=job.filename,
+                    status=job.status,
+                    progress=job.progress,
+                    message=job.message,
+                    updated_at=job.updated_at,
+                    result_title=result_title,
+                )
+            )
+    summaries.sort(key=lambda item: item.updated_at, reverse=True)
+    return RecentJobsResponse(jobs=summaries[:limit])
 
 
 @app.post("/api/market/search", response_model=MarketSearchResponse)

@@ -135,6 +135,21 @@ class MarketSearchResponse(BaseModel):
     suggestions: list[MarketSuggestion]
 
 
+class RecentJobSummary(BaseModel):
+    id: str
+    mode: Literal["guitar", "song", "separate"]
+    filename: str
+    status: str
+    progress: int
+    message: str
+    updated_at: datetime
+    result_title: str | None = None
+
+
+class RecentJobsResponse(BaseModel):
+    jobs: list[RecentJobSummary]
+
+
 class ScoreSearchRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     artist: str = Field(default="", max_length=200)

@@ -126,6 +126,101 @@ def test_musicxml_contains_string_and_fret_indications(tmp_path: Path) -> None:
     assert "<fret>" in xml
 
 
+def test_musicxml_uses_bottom_to_top_tuning_and_capo(tmp_path: Path) -> None:
+    events, _ = build_tablature(
+        [note(0.0, 0.5, 58)],
+        bpm=120,
+        tuning_text=STANDARD_TUNING,
+        capo=3,
+        max_fret=17,
+    )
+    output = tmp_path / "capo.musicxml"
+    write_musicxml(
+        events,
+        120,
+        output,
+        "Capo",
+        STANDARD_TUNING,
+        capo=3,
+    )
+
+    root = ET.parse(output).getroot()
+    tuning = [
+        (
+            item.findtext("tuning-step"),
+            int(item.findtext("tuning-octave", "0")),
+        )
+        for item in root.findall("./part/measure/attributes/staff-details/staff-tuning")
+    ]
+    assert tuning == [
+        ("E", 2),
+        ("A", 2),
+        ("D", 3),
+        ("G", 3),
+        ("B", 3),
+        ("E", 4),
+    ]
+    assert root.findtext("./part/measure/attributes/staff-details/capo") == "3"
+    assert root.findtext(".//technical/string") == "3"
+    assert root.findtext(".//technical/fret") == "0"
+
+
+def test_musicxml_matches_repeated_pitch_by_onset(tmp_path: Path) -> None:
+    events = [
+        {
+            "start": 0.0,
+            "end": 2.5,
+            "start_beat": 0.0,
+            "duration_beats": 2.5,
+            "pitch": 64,
+            "pitch_name": "E4",
+            "velocity": 80,
+            "string": 1,
+            "fret": 0,
+        },
+        {
+            "start": 2.5,
+            "end": 3.0,
+            "start_beat": 2.5,
+            "duration_beats": 0.5,
+            "pitch": 64,
+            "pitch_name": "E4",
+            "velocity": 80,
+            "string": 2,
+            "fret": 5,
+        },
+    ]
+    output = tmp_path / "repeated-pitch.musicxml"
+    write_musicxml(events, 120, output, "Repeated pitch")
+
+    root = ET.parse(output).getroot()
+    divisions = int(root.findtext("./part/measure/attributes/divisions"))
+    technical_by_onset: dict[tuple[float, str], str | None] = {}
+    for measure_index, measure in enumerate(root.findall("./part/measure")):
+        cursor = 0
+        chord_onset: int | None = None
+        for note in measure.findall("note"):
+            is_chord = note.find("chord") is not None
+            if not is_chord:
+                chord_onset = cursor
+            onset = chord_onset if chord_onset is not None else cursor
+            duration = int(note.findtext("duration", "0"))
+            if not is_chord:
+                cursor += duration
+            if note.find("pitch") is None:
+                continue
+            string = note.findtext("./notations/technical/string")
+            if string is None:
+                continue
+            beat = measure_index * 4 + onset / divisions
+            technical_by_onset[
+                (round(beat, 4), note.findtext("./notations/technical/fret", ""))
+            ] = string
+
+    assert technical_by_onset[(0.0, "0")] == "1"
+    assert technical_by_onset[(2.5, "5")] == "2"
+
+
 def test_musicxml_keeps_overlapping_attacks_in_complete_measures(
     tmp_path: Path,
 ) -> None:
