@@ -1112,6 +1112,10 @@ main {
   color: var(--muted);
 }
 
+.song-review {
+  margin: -14px 0 24px;
+}
+
 .result-actions {
   display: flex;
   flex-wrap: wrap;

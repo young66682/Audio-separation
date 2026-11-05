@@ -91,9 +91,9 @@ class MvsepProvider:
 
     @property
     def model_name(self) -> str:
-        if self.workflow == "guitar_first":
-            return "MVSEP Guitar Isolation → Lead/Rhythm"
         model_label = "one-stage" if self.model_type == "1" else "two-stage"
+        if self.workflow == "guitar_first":
+            return f"MVSEP Guitar Isolation → Lead/Rhythm ({model_label})"
         return f"MVSep Lead/Rhythm Guitar ({model_label})"
 
     def close(self) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import zipfile
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -141,6 +142,8 @@ class SongTranscriber:
             )
             raise RuntimeError(f"两把吉他都未能生成六线谱：{errors}")
 
+        warnings.extend(self._separation_review_warnings(guitar_results))
+
         score_parts = []
         for item in guitar_results:
             musicxml_path = (
@@ -189,6 +192,55 @@ class SongTranscriber:
             status="partial" if successful < 2 else "succeeded",
             result=result,
         )
+
+    @staticmethod
+    def _separation_review_warnings(
+        guitar_results: list[dict],
+        onset_tolerance: float = 0.05,
+        warning_threshold: float = 0.2,
+    ) -> list[str]:
+        """用同音高起音重叠率提示可能的串音、齐奏或重复双轨。"""
+        warnings = [
+            "主音/节奏标签由 MVSEP 模型推断，并非人工标注；"
+            "请先试听两个声部，重点检查标签互换和串音。"
+        ]
+        transcriptions = {
+            item["key"]: item.get("transcription")
+            for item in guitar_results
+            if item.get("transcription") is not None
+        }
+        lead_events = (transcriptions.get("lead") or {}).get("events") or []
+        rhythm_events = (transcriptions.get("rhythm") or {}).get("events") or []
+        if not lead_events or not rhythm_events:
+            return warnings
+
+        rhythm_starts: dict[int, list[float]] = {}
+        for event in rhythm_events:
+            rhythm_starts.setdefault(int(event["pitch"]), []).append(
+                float(event["start"])
+            )
+        for starts in rhythm_starts.values():
+            starts.sort()
+
+        overlaps = 0
+        for event in lead_events:
+            starts = rhythm_starts.get(int(event["pitch"]), [])
+            position = bisect_left(starts, float(event["start"]))
+            nearby = starts[max(0, position - 1):position + 1]
+            if any(
+                abs(start - float(event["start"])) <= onset_tolerance
+                for start in nearby
+            ):
+                overlaps += 1
+
+        ratio = overlaps / len(lead_events)
+        if ratio >= warning_threshold:
+            warnings.append(
+                f"检测到 {ratio:.1%} 的主音音符在节奏吉他中有同音高、"
+                f"{onset_tolerance:.2f}s 内的起音。可能是真实齐奏，也可能是"
+                "串音或标签混入，请对照试听。"
+            )
+        return warnings
 
     @staticmethod
     def _normalize_stems(

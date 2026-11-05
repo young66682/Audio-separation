@@ -91,7 +91,7 @@ function printScore() {
       <div>
         <span class="eyebrow">Full guitar score</span>
         <h2>双吉他总谱</h2>
-        <p>主音吉他与节奏吉他各含五线谱和六线谱，共用小节与节拍。</p>
+        <p>MVSEP 判定的主音与节奏吉他各含五线谱和六线谱，声部标签需试听确认。</p>
       </div>
       <div class="score-actions">
         <span v-if="loading" class="score-loading">正在排版…</span>

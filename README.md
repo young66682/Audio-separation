@@ -45,7 +45,7 @@ Web 应用中。
 
 ### 整曲双吉他
 
-- 可选使用 MVSEP 云端模型分离主音吉他、节奏吉他和伴奏。
+- 可选使用 MVSEP 云端模型分离主音吉他、节奏吉他和伴奏；主音/节奏标签为模型判定，界面会提示试听确认。
 - 支持两种工作流：
   - `guitar_first`：先提取全部吉他，再拆分主音与节奏。
   - `direct`：直接使用 Lead/Rhythm Guitar 模型处理整曲。
@@ -205,7 +205,7 @@ Copy-Item backend\.env.example backend\.env
 # 云端双吉他
 MVSEP_API_TOKEN=your_token
 MVSEP_WORKFLOW=guitar_first
-MVSEP_MODEL_TYPE=1
+MVSEP_MODEL_TYPE=0
 MVSEP_OUTPUT_FORMAT=2
 MVSEP_POLL_INTERVAL_SECONDS=3
 MVSEP_POLL_RETRIES=5
@@ -218,6 +218,9 @@ MVSEP_USE_ENV_PROXY=false
 DEMUCS_DEVICE=auto
 DEMUCS_JOB_TIMEOUT_SECONDS=7200
 ```
+
+`MVSEP_MODEL_TYPE=0` 表示官方推荐的两阶段 Lead/Rhythm 模型；
+`1` 是速度略快但 SDR 较低的单阶段版本。
 
 `DEMUCS_DEVICE` 可选值：
 
@@ -348,6 +351,7 @@ npm run build
 - Basic Pitch 结果仍是 AI 初稿，复杂失真、快速扫弦和混响较重时可能需要人工修正。
 - 本地分离效果依赖 Demucs 模型和原始混音质量。
 - MVSEP 免费账号有并发和额度限制。
+- MVSEP 的主音/节奏标签属于模型推断，界面只提示同音高重叠风险，仍需试听确认。
 - 浏览器刷新无法恢复尚未提交的本地文件，需要重新选择。
 - 当前六线谱统一使用 4/4 拍导出，复杂变拍歌曲可能需要人工调整。
 - 暂不支持在页面内直接编辑弦号、品位或回写 MusicXML。

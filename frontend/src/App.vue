@@ -801,8 +801,8 @@ function selectGuitar(key: GuitarKey) {
             自动生成“去掉该乐器”的伴奏，并保留全部独立音轨。
           </p>
           <p v-else-if="workMode === 'song'">
-            先由 MVSEP 把整曲分离成主音吉他、节奏吉他和伴奏，再分别在本地识别音高、
-            分配琴弦和品丝。每首歌会得到两套独立六线谱。
+            先由 MVSEP 推断出主音吉他、节奏吉他和伴奏三个声部，再分别在本地识别音高、
+            分配琴弦和品丝。每个声部都会得到独立六线谱，模型标签请试听确认。
           </p>
           <p v-else>
             适合已分离的 guitar stem 或独奏录音。系统会识别多音、自动测速，
@@ -1551,7 +1551,7 @@ function selectGuitar(key: GuitarKey) {
             <span class="eyebrow">Dual guitar transcription complete</span>
             <h1>{{ songResult.title }}</h1>
             <p>
-              主音与节奏吉他分别识别 · {{ songResult.bpm.toFixed(1) }} BPM ·
+              MVSEP 模型判定的主音与节奏吉他 · {{ songResult.bpm.toFixed(1) }} BPM ·
               {{ songResult.guitars.length }} 个吉他声部
             </p>
           </div>
@@ -1561,6 +1561,13 @@ function selectGuitar(key: GuitarKey) {
               ↓ 下载整套项目 ZIP
             </a>
           </div>
+        </div>
+
+        <div v-if="songResult.warnings.length" class="warning-box song-review">
+          <strong>主音 / 节奏标签需要试听确认</strong>
+          <p v-for="warning in songResult.warnings" :key="warning">
+            {{ warning }}
+          </p>
         </div>
 
         <GuitarScore
@@ -1585,7 +1592,7 @@ function selectGuitar(key: GuitarKey) {
             <span>{{ part.key === "lead" ? "LEAD" : "RHYTHM" }}</span>
             <strong>{{ part.label }}</strong>
             <small v-if="part.transcription">
-              {{ part.transcription.note_count }} 个音符
+              {{ part.transcription.note_count }} 个音符 · 模型判定
             </small>
             <small v-else>{{ part.error ?? "生成失败" }}</small>
           </button>
@@ -1593,7 +1600,7 @@ function selectGuitar(key: GuitarKey) {
 
         <div v-if="selectedPart?.transcription" class="result-grid">
           <aside class="playback-card">
-            <span class="eyebrow">Separated guitar</span>
+            <span class="eyebrow">Separated guitar · model-inferred role</span>
             <h2>{{ selectedPart.label }}</h2>
             <audio
               ref="audioPlayer"
@@ -1605,6 +1612,7 @@ function selectGuitar(key: GuitarKey) {
             <dl>
               <div><dt>识别模型</dt><dd>Basic Pitch</dd></div>
               <div><dt>分离模型</dt><dd>{{ health?.cloud_separation_model ?? "MVSEP" }}</dd></div>
+              <div><dt>声部标签</dt><dd>模型判定，需试听确认</dd></div>
               <div><dt>调弦</dt><dd>{{ selectedPart.transcription.tuning }}</dd></div>
               <div><dt>可演奏音符</dt><dd>{{ selectedPart.transcription.note_count }}</dd></div>
               <div><dt>伴奏音轨</dt><dd>{{ songResult.backing_available ? "已保留" : "无" }}</dd></div>

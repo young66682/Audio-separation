@@ -72,6 +72,66 @@ def test_song_pipeline_transcribes_both_guitars(tmp_path: Path) -> None:
         item["transcription"] is not None
         for item in outcome.result["guitars"]
     )
+    assert any(
+        "标签由 MVSEP 模型推断" in warning
+        for warning in outcome.result["warnings"]
+    )
     archive = next((tmp_path / "output").glob("*-guitar-tabs.zip"))
     assert archive.stat().st_size > 0
+
+
+class OverlapTranscriber(FakeTranscriber):
+    def transcribe(
+        self,
+        audio_path: Path,
+        output_dir: Path,
+        original_filename: str,
+        options: TranscriptionOptions,
+        progress_callback=None,
+    ):
+        result = super().transcribe(
+            audio_path,
+            output_dir,
+            original_filename,
+            options,
+            progress_callback,
+        )
+        result["events"] = [
+            {
+                "start": 1.0,
+                "end": 1.5,
+                "pitch": 64,
+                "velocity": 0.8,
+            },
+            {
+                "start": 2.0,
+                "end": 2.5,
+                "pitch": 67,
+                "velocity": 0.8,
+            },
+        ]
+        if "rhythm" in original_filename:
+            result["events"][0]["start"] = 1.03
+        else:
+            result["events"][1]["pitch"] = 69
+        return result
+
+
+def test_song_pipeline_warns_about_cross_stem_overlap(tmp_path: Path) -> None:
+    audio = tmp_path / "full-song.wav"
+    audio.write_bytes(b"fake")
+    outcome = SongTranscriber(
+        transcriber=OverlapTranscriber(),
+        separator=FakeSeparator(),
+    ).transcribe(
+        audio,
+        tmp_path / "output",
+        "full-song.wav",
+        TranscriptionOptions(bpm=120),
+    )
+
+    assert any(
+        "50.0% 的主音音符" in warning
+        for warning in outcome.result["warnings"]
+    )
 

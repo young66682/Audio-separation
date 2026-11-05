@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,10 @@ def test_mvsep_downloads_lead_and_rhythm_stems(
         if request.url.path.endswith("/separation/create"):
             assert b'name="sep_type"' in request.content
             assert b"101" in request.content
+            assert re.search(
+                rb'name="add_opt1"\r\n\r\n0\r\n',
+                request.content,
+            )
             return httpx.Response(
                 200,
                 json={"success": True, "data": {"hash": "job-123"}},

@@ -81,7 +81,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Fretline 扒谱与音轨分离 API",
-    version="0.1.0",
+    version="0.1.1",
     description="本地音轨分离、指定乐器伴奏与吉他扒谱。",
     lifespan=lifespan,
 )
@@ -155,16 +155,18 @@ def _get_separation_job(job_id: str) -> SeparationJob:
 
 @app.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    mvsep_variant = "one-stage" if MVSEP_MODEL_TYPE == "1" else "two-stage"
     return HealthResponse(
         status="ok",
         python=platform.python_version(),
         transcription_ready=importlib.util.find_spec("basic_pitch") is not None,
         cloud_separation_ready=bool(MVSEP_API_TOKEN),
         cloud_separation_model=(
-            "MVSEP Guitar Isolation → Lead/Rhythm"
+            "MVSEP Guitar Isolation → Lead/Rhythm "
+            f"({mvsep_variant})"
             if MVSEP_WORKFLOW == "guitar_first"
             else "MVSep Lead/Rhythm Guitar "
-            f"({'one-stage' if MVSEP_MODEL_TYPE == '1' else 'two-stage'})"
+            f"({mvsep_variant})"
         ),
         local_separation_ready=separation_ready(),
         separation_device=detect_device() if separation_ready() else None,
